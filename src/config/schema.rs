@@ -2458,6 +2458,8 @@ pub struct ChannelsConfig {
     pub dingtalk: Option<DingTalkConfig>,
     /// QQ Official Bot channel configuration.
     pub qq: Option<QQConfig>,
+    /// OneBot (NapCat/OneBot v11) channel configuration.
+    pub onebot: Option<OneBotConfig>,
     pub nostr: Option<NostrConfig>,
     /// ClawdTalk voice channel configuration.
     pub clawdtalk: Option<crate::channels::clawdtalk::ClawdTalkConfig>,
@@ -2540,6 +2542,10 @@ impl ChannelsConfig {
                 self.qq.is_some()
             ),
             (
+                Box::new(ConfigWrapper::new(&self.onebot)),
+                self.onebot.is_some()
+            ),
+            (
                 Box::new(ConfigWrapper::new(&self.nostr)),
                 self.nostr.is_some(),
             ),
@@ -2585,6 +2591,7 @@ impl Default for ChannelsConfig {
             feishu: None,
             dingtalk: None,
             qq: None,
+            onebot: None,
             nostr: None,
             clawdtalk: None,
             message_timeout_secs: default_channel_message_timeout_secs(),
@@ -3384,6 +3391,53 @@ impl ChannelConfig for QQConfig {
     }
 }
 
+fn default_onebot_listen_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_onebot_listen_port() -> u16 {
+    12347
+}
+
+fn default_onebot_ws_path() -> String {
+    "/onebot".to_string()
+}
+
+/// OneBot v11 (NapCat) channel configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OneBotConfig {
+    #[serde(default = "default_onebot_listen_host")]
+    pub listen_host: String,
+    #[serde(default = "default_onebot_listen_port")]
+    pub listen_port: u16,
+    #[serde(default = "default_onebot_ws_path")]
+    pub ws_path: String,
+    pub access_token: Option<String>,
+    #[serde(default = "default_true")]
+    pub enable_private: bool,
+    #[serde(default = "default_true")]
+    pub enable_group: bool,
+    #[serde(default = "default_true")]
+    pub require_mention_in_group: bool,
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    #[serde(default)]
+    pub allowed_groups: Vec<String>,
+    #[serde(default = "default_true")]
+    pub expect_message_array: bool,
+    #[serde(default = "default_true")]
+    pub map_images_to_markers: bool,
+}
+
+impl ChannelConfig for OneBotConfig {
+    fn name() -> &'static str {
+        "OneBot"
+    }
+    fn desc() -> &'static str {
+        "OneBot v11 (NapCat)"
+    }
+}
+
 /// Nostr channel configuration (NIP-04 + NIP-17 private messages)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NostrConfig {
@@ -3428,8 +3482,8 @@ impl Default for Config {
             config_path: zeroclaw_dir.join("config.toml"),
             api_key: None,
             api_url: None,
-            default_provider: Some("openrouter".to_string()),
-            default_model: Some("anthropic/claude-sonnet-4.6".to_string()),
+            default_provider: Some("glm".to_string()),
+            default_model: Some("GLM-4-Flash".to_string()),
             default_temperature: 0.7,
             observability: ObservabilityConfig::default(),
             autonomy: AutonomyConfig::default(),
@@ -4711,6 +4765,7 @@ default_temperature = 0.7
                 feishu: None,
                 dingtalk: None,
                 qq: None,
+                onebot: None,
                 nostr: None,
                 clawdtalk: None,
                 message_timeout_secs: 300,
@@ -5265,6 +5320,7 @@ allowed_users = ["@ops:matrix.org"]
             feishu: None,
             dingtalk: None,
             qq: None,
+            onebot: None,
             nostr: None,
             clawdtalk: None,
             message_timeout_secs: 300,
@@ -5478,6 +5534,7 @@ channel_id = "C123"
             feishu: None,
             dingtalk: None,
             qq: None,
+            onebot: None,
             nostr: None,
             clawdtalk: None,
             message_timeout_secs: 300,

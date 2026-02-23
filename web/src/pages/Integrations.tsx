@@ -2,31 +2,36 @@ import { useState, useEffect } from 'react';
 import { Puzzle, Check, Zap, Clock } from 'lucide-react';
 import type { Integration } from '@/types/api';
 import { getIntegrations } from '@/lib/api';
+import { tLocale } from '@/lib/i18n';
+import { useLocaleContext } from '@/App';
 
-function statusBadge(status: Integration['status']) {
+function statusBadge(status: Integration['status'], t: (key: string) => string) {
   switch (status) {
     case 'Active':
       return {
         icon: Check,
-        label: 'Active',
+        label: t('integrations.active'),
         classes: 'bg-green-900/40 text-green-400 border-green-700/50',
       };
     case 'Available':
       return {
         icon: Zap,
-        label: 'Available',
+        label: t('integrations.available'),
         classes: 'bg-blue-900/40 text-blue-400 border-blue-700/50',
       };
     case 'ComingSoon':
       return {
         icon: Clock,
-        label: 'Coming Soon',
+        label: t('integrations.coming_soon'),
         classes: 'bg-gray-800 text-gray-400 border-gray-700',
       };
   }
 }
 
 export default function Integrations() {
+  const { locale } = useLocaleContext();
+  const t = (key: string) => tLocale(key, locale);
+
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +66,7 @@ export default function Integrations() {
     return (
       <div className="p-6">
         <div className="rounded-lg bg-red-900/30 border border-red-700 p-4 text-red-300">
-          Failed to load integrations: {error}
+          {t('integrations.load_failed')}: {error}
         </div>
       </div>
     );
@@ -81,7 +86,7 @@ export default function Integrations() {
       <div className="flex items-center gap-2">
         <Puzzle className="h-5 w-5 text-blue-400" />
         <h2 className="text-base font-semibold text-white">
-          Integrations ({integrations.length})
+          {t('integrations.title')} ({integrations.length})
         </h2>
       </div>
 
@@ -97,7 +102,7 @@ export default function Integrations() {
                 : 'bg-gray-900 text-gray-400 border border-gray-700 hover:bg-gray-800 hover:text-white'
             }`}
           >
-            {cat}
+            {cat === 'all' ? t('memory.all_categories') : cat}
           </button>
         ))}
       </div>
@@ -106,7 +111,7 @@ export default function Integrations() {
       {Object.keys(grouped).length === 0 ? (
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center">
           <Puzzle className="h-10 w-10 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400">No integrations found.</p>
+          <p className="text-gray-400">{t('integrations.empty')}</p>
         </div>
       ) : (
         Object.entries(grouped)
@@ -118,7 +123,7 @@ export default function Integrations() {
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {items.map((integration) => {
-                  const badge = statusBadge(integration.status);
+                  const badge = statusBadge(integration.status, t);
                   const BadgeIcon = badge.icon;
                   return (
                     <div

@@ -29,6 +29,7 @@ pub mod matrix;
 pub mod mattermost;
 pub mod nextcloud_talk;
 pub mod nostr;
+pub mod onebot;
 pub mod qq;
 pub mod signal;
 pub mod slack;
@@ -56,6 +57,7 @@ pub use matrix::MatrixChannel;
 pub use mattermost::MattermostChannel;
 pub use nextcloud_talk::NextcloudTalkChannel;
 pub use nostr::NostrChannel;
+pub use onebot::OneBotChannel;
 pub use qq::QQChannel;
 pub use signal::SignalChannel;
 pub use slack::SlackChannel;
@@ -2907,6 +2909,13 @@ fn collect_configured_channels(
                 qq.app_secret.clone(),
                 qq.allowed_users.clone(),
             )),
+        });
+    }
+
+    if let Some(ref ob) = config.channels_config.onebot {
+        channels.push(ConfiguredChannel {
+            display_name: "OneBot",
+            channel: Arc::new(OneBotChannel::new(ob.clone())),
         });
     }
 

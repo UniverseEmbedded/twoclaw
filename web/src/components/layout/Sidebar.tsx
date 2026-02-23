@@ -11,7 +11,8 @@ import {
   Activity,
   Stethoscope,
 } from 'lucide-react';
-import { t } from '@/lib/i18n';
+import { tLocale } from '@/lib/i18n';
+import { useLocaleContext } from '@/App';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
@@ -27,6 +28,9 @@ const navItems = [
 ];
 
 export default function Sidebar() {
+  const { locale } = useLocaleContext();
+  const t = (key: string) => tLocale(key, locale);
+
   return (
     <aside className="fixed top-0 left-0 h-screen w-60 bg-gray-900 flex flex-col border-r border-gray-800">
       {/* Logo / Title */}
