@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import type { StatusResponse, CostSummary } from '@/types/api';
 import { getStatus, getCost } from '@/lib/api';
+import { tLocale } from '@/lib/i18n';
+import { useLocaleContext } from '@/App';
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -53,6 +55,9 @@ function healthBorder(status: string): string {
 }
 
 export default function Dashboard() {
+  const { locale } = useLocaleContext();
+  const t = (key: string) => tLocale(key, locale);
+
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [cost, setCost] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +75,7 @@ export default function Dashboard() {
     return (
       <div className="p-6">
         <div className="rounded-lg bg-red-900/30 border border-red-700 p-4 text-red-300">
-          Failed to load dashboard: {error}
+          {t('dashboard.load_failed')}: {error}
         </div>
       </div>
     );
@@ -85,6 +90,13 @@ export default function Dashboard() {
   }
 
   const maxCost = Math.max(cost.session_cost_usd, cost.daily_cost_usd, cost.monthly_cost_usd, 0.001);
+  const channelEntries = Object.entries(status.channels);
+  const activeChannels = channelEntries
+    .filter(([, active]) => active)
+    .sort(([a], [b]) => a.localeCompare(b));
+  const inactiveChannels = channelEntries
+    .filter(([, active]) => !active)
+    .sort(([a], [b]) => a.localeCompare(b));
 
   return (
     <div className="p-6 space-y-6">
@@ -95,10 +107,10 @@ export default function Dashboard() {
             <div className="p-2 bg-blue-600/20 rounded-lg">
               <Cpu className="h-5 w-5 text-blue-400" />
             </div>
-            <span className="text-sm text-gray-400">Provider / Model</span>
+            <span className="text-sm text-gray-400">{t('dashboard.provider_model')}</span>
           </div>
           <p className="text-lg font-semibold text-white truncate">
-            {status.provider ?? 'Unknown'}
+            {status.provider ?? t('dashboard.unknown')}
           </p>
           <p className="text-sm text-gray-400 truncate">{status.model}</p>
         </div>
@@ -108,12 +120,12 @@ export default function Dashboard() {
             <div className="p-2 bg-green-600/20 rounded-lg">
               <Clock className="h-5 w-5 text-green-400" />
             </div>
-            <span className="text-sm text-gray-400">Uptime</span>
+            <span className="text-sm text-gray-400">{t('dashboard.uptime')}</span>
           </div>
           <p className="text-lg font-semibold text-white">
             {formatUptime(status.uptime_seconds)}
           </p>
-          <p className="text-sm text-gray-400">Since last restart</p>
+          <p className="text-sm text-gray-400">{t('dashboard.since_last_restart')}</p>
         </div>
 
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
@@ -121,12 +133,14 @@ export default function Dashboard() {
             <div className="p-2 bg-purple-600/20 rounded-lg">
               <Globe className="h-5 w-5 text-purple-400" />
             </div>
-            <span className="text-sm text-gray-400">Gateway Port</span>
+            <span className="text-sm text-gray-400">{t('dashboard.gateway_port')}</span>
           </div>
           <p className="text-lg font-semibold text-white">
             :{status.gateway_port}
           </p>
-          <p className="text-sm text-gray-400">Locale: {status.locale}</p>
+          <p className="text-sm text-gray-400">
+            {t('dashboard.locale')}: {status.locale}
+          </p>
         </div>
 
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
@@ -134,13 +148,13 @@ export default function Dashboard() {
             <div className="p-2 bg-orange-600/20 rounded-lg">
               <Database className="h-5 w-5 text-orange-400" />
             </div>
-            <span className="text-sm text-gray-400">Memory Backend</span>
+            <span className="text-sm text-gray-400">{t('dashboard.memory_backend')}</span>
           </div>
           <p className="text-lg font-semibold text-white capitalize">
             {status.memory_backend}
           </p>
           <p className="text-sm text-gray-400">
-            Paired: {status.paired ? 'Yes' : 'No'}
+            {t('dashboard.paired')}: {status.paired ? t('common.yes') : t('common.no')}
           </p>
         </div>
       </div>
@@ -150,13 +164,13 @@ export default function Dashboard() {
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-2 mb-4">
             <DollarSign className="h-5 w-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-white">Cost Overview</h2>
+            <h2 className="text-base font-semibold text-white">{t('dashboard.cost_overview')}</h2>
           </div>
           <div className="space-y-4">
             {[
-              { label: 'Session', value: cost.session_cost_usd, color: 'bg-blue-500' },
-              { label: 'Daily', value: cost.daily_cost_usd, color: 'bg-green-500' },
-              { label: 'Monthly', value: cost.monthly_cost_usd, color: 'bg-purple-500' },
+              { label: t('cost.session'), value: cost.session_cost_usd, color: 'bg-blue-500' },
+              { label: t('cost.daily'), value: cost.daily_cost_usd, color: 'bg-green-500' },
+              { label: t('cost.monthly'), value: cost.monthly_cost_usd, color: 'bg-purple-500' },
             ].map(({ label, value, color }) => (
               <div key={label}>
                 <div className="flex justify-between text-sm mb-1">
@@ -173,11 +187,11 @@ export default function Dashboard() {
             ))}
           </div>
           <div className="mt-4 pt-3 border-t border-gray-800 flex justify-between text-sm">
-            <span className="text-gray-400">Total Tokens</span>
+            <span className="text-gray-400">{t('cost.total_tokens')}</span>
             <span className="text-white">{cost.total_tokens.toLocaleString()}</span>
           </div>
           <div className="flex justify-between text-sm mt-1">
-            <span className="text-gray-400">Requests</span>
+            <span className="text-gray-400">{t('cost.request_count')}</span>
             <span className="text-white">{cost.request_count.toLocaleString()}</span>
           </div>
         </div>
@@ -186,43 +200,86 @@ export default function Dashboard() {
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-2 mb-4">
             <Radio className="h-5 w-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-white">Active Channels</h2>
+            <h2 className="text-base font-semibold text-white">{t('dashboard.channels_title')}</h2>
           </div>
-          <div className="space-y-2">
-            {Object.entries(status.channels).length === 0 ? (
-              <p className="text-sm text-gray-500">No channels configured</p>
-            ) : (
-              Object.entries(status.channels).map(([name, active]) => (
-                <div
-                  key={name}
-                  className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-800/50"
-                >
-                  <span className="text-sm text-white capitalize">{name}</span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-block h-2.5 w-2.5 rounded-full ${
-                        active ? 'bg-green-500' : 'bg-gray-500'
-                      }`}
-                    />
-                    <span className="text-xs text-gray-400">
-                      {active ? 'Active' : 'Inactive'}
+          {channelEntries.length === 0 ? (
+            <p className="text-sm text-gray-500">{t('dashboard.no_channels')}</p>
+          ) : (
+            <div className="space-y-3">
+              <details open className="group">
+                <summary className="list-none cursor-pointer select-none flex items-center justify-between rounded-lg bg-gray-800/40 px-3 py-2">
+                  <div className="flex items-center justify-between w-full">
+                    <span className="text-sm text-white">
+                      {t('common.active')} ({activeChannels.length})
+                    </span>
+                    <span className="text-gray-400 transition-transform group-open:rotate-90">
+                      ▸
                     </span>
                   </div>
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {activeChannels.length === 0 ? (
+                    <p className="text-sm text-gray-500 px-3">{t('common.no_data')}</p>
+                  ) : (
+                    activeChannels.map(([name]) => (
+                      <div
+                        key={name}
+                        className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-800/50"
+                      >
+                        <span className="text-sm text-white capitalize">{name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500" />
+                          <span className="text-xs text-gray-400">{t('common.active')}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ))
-            )}
-          </div>
+              </details>
+
+              <details className="group">
+                <summary className="list-none cursor-pointer select-none flex items-center justify-between rounded-lg bg-gray-800/40 px-3 py-2">
+                  <div className="flex items-center justify-between w-full">
+                    <span className="text-sm text-white">
+                      {t('common.inactive')} ({inactiveChannels.length})
+                    </span>
+                    <span className="text-gray-400 transition-transform group-open:rotate-90">
+                      ▸
+                    </span>
+                  </div>
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {inactiveChannels.length === 0 ? (
+                    <p className="text-sm text-gray-500 px-3">{t('common.no_data')}</p>
+                  ) : (
+                    inactiveChannels.map(([name]) => (
+                      <div
+                        key={name}
+                        className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-800/50"
+                      >
+                        <span className="text-sm text-white capitalize">{name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block h-2.5 w-2.5 rounded-full bg-gray-500" />
+                          <span className="text-xs text-gray-400">{t('common.inactive')}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </details>
+            </div>
+          )}
         </div>
 
         {/* Health Grid */}
         <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
           <div className="flex items-center gap-2 mb-4">
             <Activity className="h-5 w-5 text-blue-400" />
-            <h2 className="text-base font-semibold text-white">Component Health</h2>
+            <h2 className="text-base font-semibold text-white">{t('dashboard.component_health')}</h2>
           </div>
           <div className="grid grid-cols-2 gap-3">
             {Object.entries(status.health.components).length === 0 ? (
-              <p className="text-sm text-gray-500 col-span-2">No components reporting</p>
+              <p className="text-sm text-gray-500 col-span-2">{t('dashboard.no_components_reporting')}</p>
             ) : (
               Object.entries(status.health.components).map(([name, comp]) => (
                 <div
@@ -238,7 +295,7 @@ export default function Dashboard() {
                   <p className="text-xs text-gray-400 capitalize">{comp.status}</p>
                   {comp.restart_count > 0 && (
                     <p className="text-xs text-yellow-400 mt-1">
-                      Restarts: {comp.restart_count}
+                      {t('health.restart_count')}: {comp.restart_count}
                     </p>
                   )}
                 </div>

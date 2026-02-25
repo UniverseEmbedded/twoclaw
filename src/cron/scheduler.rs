@@ -427,9 +427,17 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    let child = match Command::new("sh")
-        .arg("-lc")
-        .arg(&job.command)
+    let mut shell = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(&job.command);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.arg("-lc").arg(&job.command);
+        c
+    };
+
+    let child = match shell
         .current_dir(&config.workspace_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

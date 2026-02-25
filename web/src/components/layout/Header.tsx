@@ -1,6 +1,6 @@
 import { useLocation } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
-import { t } from '@/lib/i18n';
+import { tLocale, type Locale } from '@/lib/i18n';
 import { useLocaleContext } from '@/App';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -19,15 +19,12 @@ const routeTitles: Record<string, string> = {
 
 export default function Header() {
   const location = useLocation();
-  const { logout } = useAuth();
+  const { isAuthenticated, logout } = useAuth();
   const { locale, setAppLocale } = useLocaleContext();
+  const t = (key: string) => tLocale(key, locale);
 
   const titleKey = routeTitles[location.pathname] ?? 'nav.dashboard';
   const pageTitle = t(titleKey);
-
-  const toggleLanguage = () => {
-    setAppLocale(locale === 'en' ? 'tr' : 'en');
-  };
 
   return (
     <header className="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-6">
@@ -37,23 +34,27 @@ export default function Header() {
       {/* Right-side controls */}
       <div className="flex items-center gap-4">
         {/* Language switcher */}
-        <button
-          type="button"
-          onClick={toggleLanguage}
-          className="px-3 py-1 rounded-md text-sm font-medium border border-gray-600 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+        <select
+          value={locale}
+          onChange={(e) => setAppLocale(e.target.value as Locale)}
+          className="bg-gray-800 border border-gray-600 rounded-md px-3 py-1 text-sm text-gray-300 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
         >
-          {locale === 'en' ? 'EN' : 'TR'}
-        </button>
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+          <option value="tr">Türkçe</option>
+        </select>
 
         {/* Logout */}
-        <button
-          type="button"
-          onClick={logout}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-        >
-          <LogOut className="h-4 w-4" />
-          <span>{t('auth.logout')}</span>
-        </button>
+        {isAuthenticated && (
+          <button
+            type="button"
+            onClick={logout}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>{t('auth.logout')}</span>
+          </button>
+        )}
       </div>
     </header>
   );

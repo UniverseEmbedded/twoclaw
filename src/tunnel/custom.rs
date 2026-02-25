@@ -123,12 +123,26 @@ impl Tunnel for CustomTunnel {
     async fn health_check(&self) -> bool {
         // If a health URL is configured, try to reach it
         if let Some(ref url) = self.health_url {
-            return crate::config::build_runtime_proxy_client("tunnel.custom")
+            let is_localhost = reqwest::Url::parse(url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+                .is_some_and(|host| host == "127.0.0.1" || host == "localhost" || host == "::1");
+
+            let client = if is_localhost {
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .unwrap_or_else(|_| reqwest::Client::new())
+            } else {
+                crate::config::build_runtime_proxy_client("tunnel.custom")
+            };
+
+            return client
                 .get(url)
                 .timeout(std::time::Duration::from_secs(5))
                 .send()
                 .await
-                .is_ok();
+                .is_ok_and(|r| r.status().is_success());
         }
 
         // Otherwise check if the process is still alive
@@ -148,6 +162,22 @@ impl Tunnel for CustomTunnel {
 mod tests {
     use super::*;
 
+    fn sleep_1s_command() -> String {
+        if cfg!(windows) {
+            "powershell -NoProfile -Command Start-Sleep -Seconds 1".into()
+        } else {
+            "sleep 1".into()
+        }
+    }
+
+    fn echo_command(message: &str) -> String {
+        if cfg!(windows) {
+            format!("powershell -NoProfile -Command Write-Output {message}")
+        } else {
+            format!("echo {message}")
+        }
+    }
+
     #[tokio::test]
     async fn start_with_empty_command_returns_error() {
         let tunnel = CustomTunnel::new("   ".into(), None, None);
@@ -162,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_without_pattern_returns_local_url() {
-        let tunnel = CustomTunnel::new("sleep 1".into(), None, None);
+        let tunnel = CustomTunnel::new(sleep_1s_command(), None, None);
 
         let url = tunnel.start("127.0.0.1", 4455).await.unwrap();
         assert_eq!(url, "http://127.0.0.1:4455");
@@ -177,7 +207,7 @@ mod tests {
     #[tokio::test]
     async fn start_with_pattern_extracts_url() {
         let tunnel = CustomTunnel::new(
-            "echo https://public.example".into(),
+            echo_command("https://public.example"),
             None,
             Some("public.example".into()),
         );
@@ -196,7 +226,7 @@ mod tests {
     #[tokio::test]
     async fn start_replaces_host_and_port_placeholders() {
         let tunnel = CustomTunnel::new(
-            "echo http://{host}:{port}".into(),
+            echo_command("http://{host}:{port}"),
             None,
             Some("http://".into()),
         );
@@ -209,9 +239,19 @@ mod tests {
 
     #[tokio::test]
     async fn health_check_with_unreachable_health_url_returns_false() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+
         let tunnel = CustomTunnel::new(
-            "sleep 1".into(),
-            Some("http://127.0.0.1:9/healthz".into()),
+            sleep_1s_command(),
+            Some(format!("http://127.0.0.1:{}/healthz", addr.port())),
             None,
         );
 
