@@ -36,10 +36,15 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",
     "httpx>=0.25.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "zai",
+    "google-genai",
 ]
 
 [project.scripts]
 zeroclaw-tools = "zeroclaw_tools.__main__:main"
+pool-router = "pool_router.__main__:main"
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.3.0"]
@@ -57,7 +62,7 @@ Repository = "https://github.com/zeroclaw-labs/zeroclaw"
 Issues = "https://github.com/zeroclaw-labs/zeroclaw/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["zeroclaw_tools"]
+packages = ["zeroclaw_tools", "pool_router"]
 
 [tool.ruff]
 line-length = 100

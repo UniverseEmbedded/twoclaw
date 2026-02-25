@@ -159,6 +159,18 @@ pub fn all_integrations() -> Vec<IntegrationEntry> {
                 }
             },
         },
+        IntegrationEntry {
+            name: "OneBot",
+            description: "OneBot v11 (NapCat/LLOneBot)",
+            category: IntegrationCategory::Chat,
+            status_fn: |c| {
+                if c.channels_config.onebot.is_some() {
+                    IntegrationStatus::Active
+                } else {
+                    IntegrationStatus::Available
+                }
+            },
+        },
         // ── AI Models ───────────────────────────────────────────
         IntegrationEntry {
             name: "OpenRouter",

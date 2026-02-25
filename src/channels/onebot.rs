@@ -99,22 +99,26 @@ impl Channel for OneBotChannel {
             connections: Arc::clone(&self.connections),
         };
 
-        let mut app = Router::new().route(&state.config.ws_path, get(handle_onebot_ws));
-
-        if !state.config.ws_path.ends_with('/') {
-            let alt_path = format!("{}/", state.config.ws_path);
-            app = app.route(&alt_path, get(handle_onebot_ws));
-        }
-
-        let app = app.with_state(state);
-
-        axum::serve(listener, app.into_make_service()).await?;
+        serve_onebot(listener, state).await?;
         Ok(())
     }
 
     async fn health_check(&self) -> bool {
         self.connections.load(Ordering::SeqCst) > 0
     }
+}
+
+async fn serve_onebot(listener: tokio::net::TcpListener, state: OneBotServerState) -> anyhow::Result<()> {
+    let mut app = Router::new().route(&state.config.ws_path, get(handle_onebot_ws));
+
+    if !state.config.ws_path.ends_with('/') {
+        let alt_path = format!("{}/", state.config.ws_path);
+        app = app.route(&alt_path, get(handle_onebot_ws));
+    }
+
+    let app = app.with_state(state);
+    axum::serve(listener, app.into_make_service()).await?;
+    Ok(())
 }
 
 async fn handle_onebot_ws(
@@ -536,4 +540,169 @@ fn parse_recipient(recipient: &str) -> Option<OneBotTarget> {
         return Some(OneBotTarget::Private(recipient.to_string()));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::dispatcher::NativeToolDispatcher;
+    use crate::agent::Agent;
+    use crate::config::MemoryConfig;
+    use crate::memory;
+    use crate::observability::NoopObserver;
+    use crate::providers::compatible::{AuthStyle, OpenAiCompatibleProvider};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::Value;
+    use std::sync::Arc;
+    use tokio::process::Command;
+
+    async fn wait_http_ok(url: &str) -> bool {
+        let client = reqwest::Client::new();
+        for _ in 0..50 {
+            if let Ok(resp) = client.get(url).send().await {
+                if resp.status().is_success() {
+                    return true;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn onebot_closed_loop_to_pool_router_smoke() {
+        let onebot_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let onebot_port = onebot_listener.local_addr().unwrap().port();
+
+        let router_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let router_port = router_listener.local_addr().unwrap().port();
+        drop(router_listener);
+
+        let router_key = "test-router-key";
+        let python_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
+        let mock_cfg = r#"{
+            "GLM-4-Flash": {"mode":"success","content":"router-ok"},
+            "GLM-4-Flash-250414": {"mode":"success","content":"router-ok"},
+            "GLM-Z1-Flash": {"mode":"success","content":"router-ok"},
+            "GLM-4.7-Flash": {"mode":"success","content":"router-ok"}
+        }"#;
+
+        let mut child = Command::new("python")
+            .arg("-m")
+            .arg("pool_router")
+            .current_dir(&python_dir)
+            .env("FREEPOOL_HOST", "127.0.0.1")
+            .env("FREEPOOL_PORT", router_port.to_string())
+            .env("FREEPOOL_ROUTER_API_KEY", router_key)
+            .env("FREEPOOL_GLM_KEYS", "dummy-key")
+            .env("FREEPOOL_PROVIDER_MODE", "mock")
+            .env("FREEPOOL_MOCK_MODEL_CONFIG", mock_cfg)
+            .env("FREEPOOL_CLASSIFIER_MODE", "stub")
+            .env("FREEPOOL_DRY_RUN", "1")
+            .spawn()
+            .unwrap();
+
+        let healthz = format!("http://127.0.0.1:{router_port}/healthz");
+        assert!(wait_http_ok(&healthz).await);
+
+        let config = OneBotConfig {
+            listen_host: "127.0.0.1".to_string(),
+            listen_port: onebot_port,
+            ws_path: "/onebot".to_string(),
+            access_token: None,
+            enable_private: true,
+            enable_group: false,
+            require_mention_in_group: false,
+            allowed_users: vec!["*".to_string()],
+            allowed_groups: vec!["*".to_string()],
+            expect_message_array: true,
+            map_images_to_markers: true,
+        };
+        let channel = OneBotChannel::new(config.clone());
+        let (tx, mut rx) = mpsc::channel(8);
+        let state = OneBotServerState {
+            config,
+            outbound: channel.outbound.clone(),
+            inbound: tx,
+            connections: Arc::clone(&channel.connections),
+        };
+        let server_task = tokio::spawn(async move { serve_onebot(onebot_listener, state).await });
+
+        let url = format!("ws://127.0.0.1:{onebot_port}/onebot");
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+        let event = serde_json::json!({
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 123,
+            "self_id": 999,
+            "message_id": 1,
+            "time": 1700000000,
+            "message": [{"type":"text","data":{"text":"hi"}}]
+        });
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            event.to_string().into(),
+        ))
+            .await
+            .unwrap();
+
+        let incoming = rx.recv().await.unwrap();
+        assert_eq!(incoming.reply_target, "user:123");
+        assert_eq!(incoming.content, "hi");
+
+        let provider = OpenAiCompatibleProvider::new(
+            "router",
+            &format!("http://127.0.0.1:{router_port}/v1"),
+            Some(router_key),
+            AuthStyle::Bearer,
+        );
+        let mem_cfg = MemoryConfig {
+            backend: "none".to_string(),
+            ..MemoryConfig::default()
+        };
+        let mem = Arc::from(memory::create_memory(&mem_cfg, &std::env::temp_dir(), None).unwrap());
+        let mut agent = Agent::builder()
+            .provider(Box::new(provider))
+            .tools(vec![])
+            .memory(mem)
+            .observer(Arc::new(NoopObserver))
+            .tool_dispatcher(Box::new(NativeToolDispatcher))
+            .workspace_dir(std::env::temp_dir())
+            .model_name("auto".to_string())
+            .temperature(0.0)
+            .build()
+            .unwrap();
+        let reply = agent.turn(&incoming.content).await.unwrap();
+        channel
+            .send(&SendMessage::new(&reply, &incoming.reply_target))
+            .await
+            .unwrap();
+
+        let mut got = None;
+        for _ in 0..20 {
+            let next = tokio::time::timeout(std::time::Duration::from_secs(1), ws.next()).await;
+            if let Ok(Some(Ok(msg))) = next {
+                if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+                    got = Some(text);
+                    break;
+                }
+            }
+        }
+        let payload = got.unwrap();
+        let v: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(v.get("action").and_then(|x| x.as_str()), Some("send_private_msg"));
+        let sent = v
+            .get("params")
+            .and_then(|p| p.get("message"))
+            .and_then(|m| m.as_array())
+            .and_then(|a| a.first())
+            .and_then(|x| x.get("data"))
+            .and_then(|d| d.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        assert!(sent.starts_with("[DRY_RUN]"));
+
+        server_task.abort();
+        let _ = child.kill().await;
+    }
 }

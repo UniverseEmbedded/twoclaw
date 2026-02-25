@@ -239,7 +239,9 @@ mod tests {
 
     #[tokio::test]
     async fn health_check_with_unreachable_health_url_returns_false() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
