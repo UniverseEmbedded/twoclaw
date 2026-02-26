@@ -1,7 +1,11 @@
 import datetime as _dt
+import logging
+import os
+import time
 import threading
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
+from pathlib import Path
 
 from .algorithms import chunk_text, cosine_similarity
 from .config import Mem1Settings, RuntimeConfig
@@ -90,6 +94,103 @@ class Mem1Service:
             "updated_at": _ts_to_iso(item["updated_at"]),
             "embedder": embedder.model_name,
             "chunk_count": len(chunks),
+        }
+
+    def ingest_files(
+        self,
+        *,
+        source_path: str,
+        user_id: str | None,
+        agent_id: str | None,
+        run_id: str | None,
+        incremental: bool,
+    ) -> dict[str, Any]:
+        log = logging.getLogger("mem1.ingest")
+        sp = str(source_path or "").strip()
+        if not sp:
+            raise ValueError("invalid_source_path")
+        root = Path(sp)
+        if not root.exists():
+            raise FileNotFoundError(sp)
+
+        cfg = self.runtime_config
+        embedder = self._build_embedder()
+        deadline_s = None
+        raw_timeout = (os.environ.get("MEM1_INGEST_TIMEOUT_SECS") or "").strip()
+        if raw_timeout:
+            try:
+                deadline_s = time.monotonic() + max(1, int(raw_timeout))
+            except Exception:
+                deadline_s = None
+        files: list[Path] = []
+        if root.is_file():
+            files = [root]
+        else:
+            for p in root.rglob("*"):
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() not in {".md", ".txt"}:
+                    continue
+                files.append(p)
+
+        chunks_added = 0
+        chunks_skipped = 0
+        errors: list[dict[str, Any]] = []
+        ordered = sorted(files)
+        log.warning("ingest start: root=%s files=%d incremental=%s embedder=%s", str(root), len(ordered), incremental, embedder.model_name)
+        for idx, fp in enumerate(ordered, start=1):
+            if deadline_s is not None and time.monotonic() > deadline_s:
+                errors.append({"source_path": str(fp), "error": "ingest_timeout"})
+                log.warning("ingest timeout reached, stopping (processed=%d/%d)", idx - 1, len(ordered))
+                break
+            try:
+                st = fp.stat()
+                mtime = int(st.st_mtime)
+                size = int(st.st_size)
+                sp_file = str(fp)
+                if incremental:
+                    prev = self._store.get_ingest_state(source_path=sp_file)
+                    if prev and int(prev.get("source_mtime") or 0) == mtime and int(prev.get("source_size") or 0) == size:
+                        chunks_skipped += 1
+                        if idx == 1 or idx % 10 == 0:
+                            log.warning("ingest progress: %d/%d skipped=%d added=%d", idx, len(ordered), chunks_skipped, chunks_added)
+                        continue
+
+                text = fp.read_text(encoding="utf-8", errors="ignore")
+                chunks = chunk_text(text, chunk_size=cfg.chunk_size, overlap=cfg.chunk_overlap)
+                if not chunks:
+                    self._store.delete_by_source_path(source_path=sp_file)
+                    self._store.upsert_ingest_state(source_path=sp_file, source_mtime=mtime, source_size=size)
+                    continue
+                log.warning("ingest file: %d/%d path=%s chunks=%d", idx, len(ordered), sp_file, len(chunks))
+                embeddings = embedder.embed_texts(chunks)
+                res = self._store.replace_file_chunks(
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    run_id=run_id,
+                    source_path=sp_file,
+                    source_mtime=mtime,
+                    source_size=size,
+                    embedding_model=embedder.model_name,
+                    chunks=chunks,
+                    chunk_embeddings=embeddings,
+                    metadata={"source_type": "file_ingest", "root_path": str(root)},
+                )
+                chunks_added += int(res.get("inserted") or 0)
+                if idx == 1 or idx % 10 == 0:
+                    log.warning("ingest progress: %d/%d skipped=%d added=%d", idx, len(ordered), chunks_skipped, chunks_added)
+            except Exception as e:
+                errors.append({"source_path": str(fp), "error": str(e)})
+                log.warning("ingest error: path=%s err=%s", str(fp), str(e))
+
+        log.warning("ingest done: root=%s skipped=%d added=%d errors=%d", str(root), chunks_skipped, chunks_added, len(errors))
+        return {
+            "source_path": str(root),
+            "files": len(files),
+            "chunks_added": int(chunks_added),
+            "chunks_skipped": int(chunks_skipped),
+            "errors": errors,
+            "embedder": embedder.model_name,
         }
 
     def list_memories(

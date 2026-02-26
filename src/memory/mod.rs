@@ -5,6 +5,7 @@ pub mod embeddings;
 pub mod hygiene;
 pub mod lucid;
 pub mod markdown;
+pub mod mem1_bridge;
 pub mod none;
 #[cfg(feature = "memory-postgres")]
 pub mod postgres;
@@ -22,6 +23,7 @@ pub use backend::{
 };
 pub use lucid::LucidMemory;
 pub use markdown::MarkdownMemory;
+pub use mem1_bridge::Mem1BridgeMemory;
 pub use none::NoneMemory;
 #[cfg(feature = "memory-postgres")]
 pub use postgres::PostgresMemory;
@@ -346,6 +348,17 @@ pub fn create_memory_with_storage_and_routes(
         || build_postgres_memory(storage_provider),
         "",
     )
+    .map(|mem| {
+        if config.mem1.enabled {
+            Box::new(Mem1BridgeMemory::new(
+                mem,
+                config.mem1.clone(),
+                workspace_dir.to_path_buf(),
+            )) as Box<dyn Memory>
+        } else {
+            mem
+        }
+    })
 }
 
 pub fn create_memory_for_migration(
@@ -407,6 +420,8 @@ mod tests {
     use super::*;
     use crate::config::{EmbeddingRouteConfig, StorageProviderConfig};
     use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn factory_sqlite() {
@@ -417,6 +432,46 @@ mod tests {
         };
         let mem = create_memory(&cfg, tmp.path(), None).unwrap();
         assert_eq!(mem.name(), "sqlite");
+    }
+
+    #[tokio::test]
+    async fn factory_wraps_mem1_bridge_when_enabled() {
+        let tmp = TempDir::new().unwrap();
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/search"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(vec![serde_json::json!({
+                    "id": "m_test",
+                    "memory": "chunk: hello",
+                    "score": 0.9,
+                    "metadata": {"source_path": "docs/mem1_kb_small/demo.md"},
+                    "created_at": "2026-02-26T00:00:00Z"
+                })]),
+            )
+            .mount(&server)
+            .await;
+
+        let mut cfg = MemoryConfig {
+            backend: "none".into(),
+            ..MemoryConfig::default()
+        };
+        cfg.mem1 = crate::config::schema::Mem1BridgeConfig {
+            enabled: true,
+            base_url: Some(server.uri()),
+            user_id: Some("u_test".into()),
+            agent_id: Some("a_test".into()),
+            ingest_on_startup: false,
+            ingest_paths: vec![],
+            recall_limit: 5,
+            timeout_secs: 5,
+        };
+
+        let mem = create_memory(&cfg, tmp.path(), None).unwrap();
+        let hits = mem.recall("hello", 5, None).await.unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits.iter().any(|e| e.content.contains("hello")));
     }
 
     #[test]

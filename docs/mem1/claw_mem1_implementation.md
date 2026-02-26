@@ -290,33 +290,97 @@ pip install numpy usearch google-genai aiosqlite orjson
 
 ---
 
-## 六、SQLite表Schema
+## 六、数据库设计
+
+### 6.1 "真相来源"裁决（必须写死）
+
+**系统真相来源是：`tags` + `chunk_tag_map`**
+
+- `tags_json`（如果保留）只能作为缓存/调试字段，不作为查询与boost的权威来源
+- 任何写入流程必须保证：写入chunk_tag_map后（可选）再回填tags_json，且回填失败不影响检索
+
+### 6.2 最小Schema（三表）
+
+**chunks表**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| chunk_id | TEXT PK | 主键 |
+| scope_type | TEXT | user/agent/run |
+| scope_id | TEXT | 作用域ID |
+| source_path | TEXT | 原始文件路径或URI |
+| source_mtime | REAL | 文件修改时间 |
+| chunk_index | INTEGER | 文件内序号 |
+| text | TEXT | 文本内容 |
+| chunk_hash | TEXT | 幂等关键（hash(text + source_path + chunk_index)） |
+| embedding | BLOB | 向量 |
+| embedding_model | TEXT | 向量模型名 |
+| created_at | REAL | 创建时间 |
+
+**tags表**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| tag_id | TEXT PK | 主键 |
+| scope_type | TEXT | user/agent/run |
+| scope_id | TEXT | 作用域ID |
+| tag_text | TEXT | 规范化后的tag |
+| tag_hash | TEXT | normalize(tag_text)的hash（可选） |
+| embedding | BLOB | 向量 |
+| embedding_model | TEXT | 向量模型名 |
+| created_at | REAL | 创建时间 |
+
+**chunk_tag_map表**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| chunk_id | TEXT | 外键 |
+| tag_id | TEXT | 外键 |
+| weight | REAL | 权重（默认1.0） |
+| origin | TEXT | 来源：tagger/rule/core/backfill |
+| created_at | REAL | 创建时间（可选） |
+
+**复合唯一键**：(chunk_id, tag_id)
+
+### 6.3 索引策略与阶段性
+
+| 阶段 | chunk侧 | tag侧 | 说明 |
+|------|---------|-------|------|
+| Phase A | 允许简化检索（线性/SQL），但必须保存embedding | 可选 | 先跑通流程 |
+| Phase B | 同上 | 必须有tag_index（哪怕线性） | boost依赖tag召回 |
+| Phase B后半 | 引入ANN（usearch）提升性能 | ANN优化 | 性能工程 |
+
+**索引重建规则**：
+- 何时full rebuild：embedding_model变更、索引损坏
+- 何时增量upsert：新增/修改chunk或tag
+
+### 6.4 完整SQL
 
 ```sql
 -- 记忆块表
-CREATE TABLE IF NOT EXISTS memo_chunks (
-    id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS chunks (
+    chunk_id TEXT PRIMARY KEY,
     scope_type TEXT NOT NULL,
     scope_id TEXT NOT NULL,
+    source_path TEXT,
+    source_mtime REAL,
+    chunk_index INTEGER,
     text TEXT NOT NULL,
-    ts REAL NOT NULL,
-    vector BLOB,
-    tags_json TEXT,
-    meta_json TEXT,
-    hash TEXT,
-    created_at REAL DEFAULT (julianday('now')),
-    updated_at REAL DEFAULT (julianday('now'))
+    chunk_hash TEXT,
+    embedding BLOB,
+    embedding_model TEXT,
+    created_at REAL DEFAULT (julianday('now'))
 );
 
 -- 标签表
 CREATE TABLE IF NOT EXISTS tags (
-    id TEXT PRIMARY KEY,
+    tag_id TEXT PRIMARY KEY,
     scope_type TEXT NOT NULL,
     scope_id TEXT NOT NULL,
-    tag TEXT NOT NULL,
-    vector BLOB,
-    count INTEGER DEFAULT 1,
-    last_ts REAL,
+    tag_text TEXT NOT NULL,
+    tag_hash TEXT,
+    embedding BLOB,
+    embedding_model TEXT,
     created_at REAL DEFAULT (julianday('now'))
 );
 
@@ -325,9 +389,11 @@ CREATE TABLE IF NOT EXISTS chunk_tag_map (
     chunk_id TEXT NOT NULL,
     tag_id TEXT NOT NULL,
     weight REAL DEFAULT 1.0,
+    origin TEXT DEFAULT 'tagger',
+    created_at REAL DEFAULT (julianday('now')),
     PRIMARY KEY (chunk_id, tag_id),
-    FOREIGN KEY (chunk_id) REFERENCES memo_chunks(id),
-    FOREIGN KEY (tag_id) REFERENCES tags(id)
+    FOREIGN KEY (chunk_id) REFERENCES chunks(chunk_id),
+    FOREIGN KEY (tag_id) REFERENCES tags(tag_id)
 );
 
 -- 记忆历史表（用于history接口）
@@ -341,9 +407,11 @@ CREATE TABLE IF NOT EXISTS memory_history (
 );
 
 -- 索引
-CREATE INDEX IF NOT EXISTS idx_chunks_scope ON memo_chunks(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_scope ON chunks(scope_type, scope_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(chunk_hash);
 CREATE INDEX IF NOT EXISTS idx_tags_scope ON tags(scope_type, scope_id);
-CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
+CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag_text);
+CREATE INDEX IF NOT EXISTS idx_tags_hash ON tags(tag_hash);
 CREATE INDEX IF NOT EXISTS idx_history_memory ON memory_history(memory_id);
 ```
 

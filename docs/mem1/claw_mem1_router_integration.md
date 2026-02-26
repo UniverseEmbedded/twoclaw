@@ -292,9 +292,101 @@ MEM1_BASE_URL=http://mem1:8001
 
 ---
 
-## 八、与ZeroClaw的接入方式
+## 八、后台摄取（Knowledge Base Folder Ingestion）
 
-### 8.1 工具式接入（推荐起步）
+### 8.1 推荐架构
+
+**在ZeroClaw侧做`kb_watcher`（sidecar/子进程），mem1只负责存储/检索**
+
+原因：
+- mem1保持"存储/检索服务"职责，不承担文件系统监控、解析各种格式的复杂性
+- watcher失败不影响mem1服务可用性
+- 更符合"mem1不做router"那种职责分离的思路
+
+### 8.2 组件拆分
+
+**kb_watcher（ZeroClaw侧）**：
+- 监控目录、发现变更
+- 文档解析（md/txt/pdf/docx…先从md/txt做起）
+- chunker（按段落/标题/长度）
+- 调mem1 `/add`
+
+**mem1（服务）**：
+- 接收chunks
+- 调embedding（gemini-embedding-001）
+- 调Router做tags
+- 写库 + 更新索引
+- 提供`/search`给ZeroClaw读记忆
+
+### 8.3 增量策略
+
+**文件指纹 + chunk指纹两层缓存**：
+
+- 文件级：`(path, mtime, size)` 或 hash（更稳但更慢）
+- chunk级：`hash(text + source_path + chunk_index)`
+  - 如果chunk hash未变化：不重新embedding / 不重新tagger
+  - 如果变化：更新该chunk及其tag映射
+
+数据库侧加`chunk_hash`字段，做幂等写入。
+
+### 8.4 失败策略
+
+| 场景 | 处理方式 |
+|------|----------|
+| tagger超时 | 写入降级：先写chunk，后补tags |
+| embedding失败 | 标记pending，后台重试 |
+| mem1不可用 | watcher本地队列暂存，恢复后重放 |
+| search不可用 | 自动回退到Phase A纯chunk检索 |
+
+### 8.5 LLM调用边界
+
+tagger/摘要等仍通过FreePool Router（mem1不实现router）。
+
+---
+
+## 九、聊天时读写策略（Chat-time Read/Write）
+
+### 9.1 Read Path（每轮用户输入怎么检索）
+
+1. **query embedding**：对用户输入做embedding
+2. **模型一致性检查**：query embedding模型与库内模型必须一致
+3. **mem1 `/search`**：传入scope（user_id/agent_id）、topK、过滤条件
+4. **注入prompt**：将命中内容作为"记忆/上下文"注入ZeroClaw的对话链
+   - 格式：引用来源、摘要/原文
+
+### 9.2 Write Path（每轮输出是否写回）
+
+**写入门控**（详见[写入策略](./claw_mem1_write_policy.md)）：
+- 只把"稳定事实/偏好/任务状态"写入
+- 情绪宣泄/临时推理不写
+- 重复信息不写（查重：hash或语义近似）
+
+**写入流程**：
+1. LLM生成结构化记忆条目
+2. 调mem1 `/add`
+3. scope用user_id / agent_id区分
+
+### 9.3 scope映射规则
+
+| ZeroClaw字段 | mem1字段 | 说明 |
+|--------------|----------|------|
+| user_id | scope_type=user, scope_id=user_id | 用户级记忆 |
+| agent_id | scope_type=agent, scope_id=agent_id | 代理级记忆 |
+| run_id | scope_type=run, scope_id=run_id | 会话级记忆 |
+
+### 9.4 失败与回退
+
+| 场景 | 处理方式 |
+|------|----------|
+| mem1不可用 | ZeroClaw继续（无记忆模式） |
+| Phase B不可用 | mem1回退到Phase A搜索 |
+| embedding模型不一致 | 报警/拒绝boost，降级为纯文本检索 |
+
+---
+
+## 十、与ZeroClaw的接入方式
+
+### 10.1 工具式接入（推荐起步）
 
 ZeroClaw把"记忆"当工具调用：
 
@@ -313,7 +405,7 @@ async fn memory_recall(query: &str, user_id: &str) -> Vec<Memory> {
 }
 ```
 
-### 8.2 OpenAI代理式接入
+### 10.2 OpenAI代理式接入
 
 ZeroClaw把base_url指向mem1：
 
@@ -336,3 +428,6 @@ let base_url = "http://mem1:8001/v1";  // 走mem1代理
 - [TagMemo算法迁移](./claw_tagmemo_algorithm.md)
 - [mem1实现指南](./claw_mem1_implementation.md)
 - [分阶段交付计划](./claw_mem1_phases.md)
+- [目录摄取工程方案](./claw_mem1_ingestion.md)
+- [聊天时读写闭环](./claw_mem1_zeroclaw_runtime.md)
+- [写入策略](./claw_mem1_write_policy.md)

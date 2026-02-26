@@ -1789,6 +1789,53 @@ pub struct MemoryConfig {
     /// Only used when `backend = "qdrant"`.
     #[serde(default)]
     pub qdrant: QdrantConfig,
+
+    /// Optional bridge to mem1 (HTTP) for memory recall/store + KB ingest.
+    #[serde(default)]
+    pub mem1: Mem1BridgeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Mem1BridgeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub ingest_on_startup: bool,
+    #[serde(default)]
+    pub ingest_paths: Vec<String>,
+    #[serde(default = "default_mem1_recall_limit")]
+    pub recall_limit: usize,
+    #[serde(default = "default_mem1_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_mem1_recall_limit() -> usize {
+    5
+}
+
+fn default_mem1_timeout_secs() -> u64 {
+    15
+}
+
+impl Default for Mem1BridgeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: None,
+            user_id: None,
+            agent_id: None,
+            ingest_on_startup: false,
+            ingest_paths: vec![],
+            recall_limit: default_mem1_recall_limit(),
+            timeout_secs: default_mem1_timeout_secs(),
+        }
+    }
 }
 
 fn default_embedding_provider() -> String {
@@ -1859,6 +1906,7 @@ impl Default for MemoryConfig {
             auto_hydrate: true,
             sqlite_open_timeout_secs: None,
             qdrant: QdrantConfig::default(),
+            mem1: Mem1BridgeConfig::default(),
         }
     }
 }
@@ -4893,7 +4941,6 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
-    use tempfile::TempDir;
     use tokio::sync::{Mutex, MutexGuard};
     use tokio::test;
     use tokio_stream::wrappers::ReadDirStream;

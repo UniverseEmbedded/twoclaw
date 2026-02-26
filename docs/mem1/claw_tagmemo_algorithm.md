@@ -405,6 +405,77 @@ VCP原实现是同步的，Python版需要：
 
 ---
 
+## 六、调试与调参指南（最小版）
+
+### 6.1 A/B对比方法
+
+**目标**：验证boost是否让结果变好
+
+**步骤**：
+1. 准备固定测试集（20-50个query，来自真实对话/日记）
+2. 运行两组检索：
+   - A组：boost off（直接用query向量检索）
+   - B组：boost on（用fused_vector检索）
+3. 对比指标：
+   - 人工打分：相关性评分（1-5分）
+   - hit@k：前K条中包含正确答案的比例
+   - 多样性：结果之间的语义差异度
+
+### 6.2 必须观察的debug_info
+
+每次`/search`应输出以下信息（可通过日志或响应中的可选字段）：
+
+| 字段 | 来源 | 说明 |
+|------|------|------|
+| activation | ResidualPyramid | TagMemo激活度 |
+| entropy | EPA | 熵（归一化后） |
+| logicDepth | EPA | 逻辑深度（1 - entropy） |
+| dynamicBoostFactor | TagMemo Boost | 动态boost系数（clamp前后） |
+| top_tags | TagMemo Boost | topN标签（id/text/score） |
+| fused_vector_cos_sim | TagMemo Boost | fused_vector与原query的余弦相似度 |
+
+**用途**：
+- activation过低 → 可能不需要boost
+- dynamicBoostFactor过高 → boost过猛，需要调参
+- fused_vector_cos_sim过低 → boost方向偏离query
+
+### 6.3 调参顺序建议
+
+**第一阶段：限制上限防炸**
+1. 先调整`dynamicBoostRange`：限制boost上限（如[0.3, 1.5]）
+2. 观察`dynamicBoostFactor`分布，确保不常触及上限
+
+**第二阶段：调响应灵敏度**
+3. 调整`activationMultiplier`：控制activation对boost的影响
+4. 观察activation与dynamicBoostFactor的相关性
+
+**第三阶段：调核心标签锚定强度**
+5. 调整`coreBoostRange`：控制核心标签的额外增强
+6. 观察coreTags是否在top_tags中出现
+
+**第四阶段：调跨语言/技术词惩罚**
+7. 调整`languageCompensator.*`：控制跨语言/技术词的权重
+8. 观察技术词tag的权重变化
+
+### 6.4 常见问题与解决
+
+| 问题 | 可能原因 | 解决方案 |
+|------|----------|----------|
+| boost后结果变差 | dynamicBoostRange过大 | 降低上限 |
+| 结果过于集中 | activationMultiplier过高 | 降低activation影响 |
+| 核心标签丢失 | coreBoostRange过低 | 提高核心标签增强 |
+| 技术词tag权重过高 | languageCompensator未生效 | 检查query_world推断 |
+| 结果多样性差 | 去重阈值过低 | 提高deduplicationThreshold |
+
+### 6.5 回归测试
+
+每次调参后，运行固定测试集验证：
+- 相关性不应下降
+- 多样性不应明显下降
+- 延迟不应明显增加
+
+---
+
 ## 相关文档
 
 - [VCP记忆系统概述](./claw_vcp_overview.md)

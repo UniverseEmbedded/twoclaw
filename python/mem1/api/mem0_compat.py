@@ -48,13 +48,16 @@ async def add_memories(req: Request):
     if metadata is not None and not isinstance(metadata, dict):
         raise HTTPException(status_code=400, detail="invalid_metadata")
     svc = _get_service(req)
-    item = svc.add_memory(
-        messages=messages,
-        user_id=str(user_id) if user_id is not None else None,
-        agent_id=str(agent_id) if agent_id is not None else None,
-        run_id=str(run_id) if run_id is not None else None,
-        metadata=metadata,
-    )
+    try:
+        item = svc.add_memory(
+            messages=messages,
+            user_id=str(user_id) if user_id is not None else None,
+            agent_id=str(agent_id) if agent_id is not None else None,
+            run_id=str(run_id) if run_id is not None else None,
+            metadata=metadata,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"embedder_failed: {e}")
     return {"results": [{"id": item["id"], "memory": item["memory"], "event": "ADD", "metadata": item["metadata"]}]}
 
 
@@ -126,13 +129,16 @@ async def search(req: Request):
     run_id = body.get("run_id")
     limit = body.get("limit", 10)
     svc = _get_service(req)
-    return svc.search(
-        query=query,
-        user_id=str(user_id) if user_id is not None else None,
-        agent_id=str(agent_id) if agent_id is not None else None,
-        run_id=str(run_id) if run_id is not None else None,
-        limit=int(limit) if isinstance(limit, int) else 10,
-    )
+    try:
+        return svc.search(
+            query=query,
+            user_id=str(user_id) if user_id is not None else None,
+            agent_id=str(agent_id) if agent_id is not None else None,
+            run_id=str(run_id) if run_id is not None else None,
+            limit=int(limit) if isinstance(limit, int) else 10,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"embedder_failed: {e}")
 
 
 @router.post("/reset")

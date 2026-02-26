@@ -35,11 +35,20 @@
 - [ ] `GET /mem1/status` 返回正确的统计信息
 - [ ] 能用curl或Postman完成完整流程测试
 
-### A.3 依赖
+### A.3 Phase A完成判据（必须落地成可验收的定义）
+
+Phase A"完成"不仅是API跑通，必须满足以下条件：
+
+1. **DB口径**：必须存在并被真实写入的三表：`chunks`、`tags`、`chunk_tag_map`
+2. **幂等写入**：同一文件同一chunk多次ingest不应重复写入（用`chunk_hash`或同等机制）
+3. **向量空间一致性**：chunks与tags的`embedding_model`必须记录并可在status中观察到
+4. **回退机制**：tagger/tag_index不可用时，`/search`必须fallback到纯chunk检索（保证系统可用）
+
+### A.4 依赖
 
 - 无前置依赖
 
-### A.4 预估工作量
+### A.5 预估工作量
 
 1-2天
 
@@ -70,19 +79,33 @@ query → embedding → 向量检索 → topK
 query → embedding → EPA分析 → 残差金字塔 → TagMemo Boost → 向量检索 → topK
 ```
 
-### B.3 验收标准
+### B.3 Phase B硬依赖（必须写死）
+
+Phase B（EPA/Residual/TagMemo Boost）依赖以下条件，缺一不可：
+
+1. **tagger能稳定产出tags并落库**：tags表和chunk_tag_map表有真实数据
+2. **tag_index已建立且可用于query→tags召回**：没有tag_index，EPA/Residual/Boost只是空转
+3. **EPA/Residual/Boost必须基于相同embedding空间运行**：query/tag/chunk在同一向量空间
+4. **启用Phase B的同时必须保持Phase A可回退**：当增强模块不可用时自动fallback
+
+### B.4 验收标准（可观测 + 可控）
 
 - [ ] EPA能输出logic_depth、entropy等特征
 - [ ] 残差金字塔能输出coverage、novelty等特征
 - [ ] TagMemo Boost能正确融合query和tag向量
 - [ ] 检索结果比Phase A更相关（可通过A/B测试验证）
 
-### B.4 依赖
+**可观测性要求**：
+- `/search`需要产生最小debug信息：top tags、boostFactor、activation、entropy/logicDepth
+- rag_params的调参流程可执行（默认值、如何收敛、如何回归）
 
-- Phase A完成
+### B.5 依赖
+
+- Phase A完成（含三表真实写入、幂等写入、向量空间一致性）
 - rag_params配置到位
+- tag_index已建立
 
-### B.5 预估工作量
+### B.6 预估工作量
 
 2-3天
 
@@ -276,6 +299,9 @@ Phase A ─→ Phase B ─→ Phase C ─→ Phase D ─→ Phase E
 - [ ] 能写入记忆
 - [ ] 能检索记忆
 - [ ] 健康检查正常
+- [ ] 三表（chunks/tags/chunk_tag_map）存在并被真实写入
+- [ ] 幂等写入机制生效（chunk_hash）
+- [ ] embedding_model可查询
 
 ### Phase B完成检查点
 
@@ -283,6 +309,9 @@ Phase A ─→ Phase B ─→ Phase C ─→ Phase D ─→ Phase E
 - [ ] 残差金字塔输出正确
 - [ ] TagMemo Boost生效
 - [ ] 检索质量提升
+- [ ] tag_index可用
+- [ ] debug_info可观测
+- [ ] Phase A回退机制正常
 
 ### Phase C完成检查点
 
@@ -296,6 +325,18 @@ Phase A ─→ Phase B ─→ Phase C ─→ Phase D ─→ Phase E
 - [ ] 记忆注入正确
 - [ ] 自动回写正确
 - [ ] 不影响非记忆请求
+
+---
+
+## 关键裁决
+
+### 唯一真相来源与一致性
+
+本项目中，标签相关的唯一真相来源为`tags`与`chunk_tag_map`。如保留`tags_json`，其仅用于缓存或调试展示，不可作为检索与TagMemo Boost的权威输入。写入流程必须确保tagger产出的标签写入`tags/chunk_tag_map`后再进行任何可选的回填操作，回填失败不影响系统可用性。
+
+### Phase B的硬依赖与回退
+
+Phase B（EPA/Residual/TagMemo Boost）依赖`tag_index`与稳定的tag资产（tags/chunk_tag_map）。当tagger、tag_index或任一增强模块不可用时，系统必须自动回退到Phase A的纯chunk相似度检索，保证`/search`始终可用。
 
 ---
 

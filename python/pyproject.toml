@@ -72,6 +72,8 @@ target-version = "py310"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+log_cli = true
+log_cli_level = "WARNING"
 markers = [
     "integration: live integration tests (may require network/credentials)",
 ]

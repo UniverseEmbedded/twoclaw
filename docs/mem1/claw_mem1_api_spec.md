@@ -53,11 +53,27 @@ mem1提供与mem0 server一致的REST接口（同路径/同字段），以便：
   "user_id": "u1",
   "agent_id": "a1",
   "run_id": "r1",
-  "metadata": {"k": "v"}
+  "metadata": {
+    "source_path": "/path/to/file.md",
+    "source_mtime": 1709000000,
+    "chunk_index": 0,
+    "chunk_hash": "abc123...",
+    "embedding_model": "gemini-embedding-001"
+  }
 }
 ```
 
 **行为**：切块 → 标签 → embedding → 入库 → 索引更新
+
+**metadata字段约定**（用于目录摄取场景）：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| source_path | 否 | 原始文件路径或URI |
+| source_mtime | 否 | 文件修改时间（Unix时间戳） |
+| chunk_index | 否 | 文件内序号 |
+| chunk_hash | 否 | 幂等键（hash(text + source_path + chunk_index)） |
+| embedding_model | 否 | 向量模型名（服务端也可填充） |
 
 **响应**：
 ```json
@@ -273,10 +289,25 @@ mem1提供与mem0 server一致的REST接口（同路径/同字段），以便：
   "chunk_count": 12345,
   "tag_count": 2345,
   "index_ready": true,
+  "tag_index_ready": true,
+  "chunk_index_ready": true,
   "embedder": "gemini-embedding-001",
-  "rag_params_version": "sha1:abc123..."
+  "embedding_model_in_use": "gemini-embedding-001",
+  "rag_params_version": "sha1:abc123...",
+  "last_ingest_at": "2026-02-26T10:00:00Z",
+  "last_ingest_error": null
 }
 ```
+
+**可运维字段说明**：
+
+| 字段 | 说明 |
+|------|------|
+| tag_index_ready | tag索引是否就绪 |
+| chunk_index_ready | chunk索引是否就绪 |
+| embedding_model_in_use | 当前库使用的主embedding模型 |
+| last_ingest_at | 最近一次摄取时间 |
+| last_ingest_error | 最近一次摄取错误摘要 |
 
 ---
 
@@ -373,6 +404,64 @@ mem1提供与mem0 server一致的REST接口（同路径/同字段），以便：
   "errors": []
 }
 ```
+
+---
+
+### 2.6 POST /mem1/batch_add
+
+批量写入chunks（为watcher提升吞吐）。
+
+**请求体**：
+```json
+{
+  "chunks": [
+    {
+      "text": "chunk内容1",
+      "source_path": "/path/to/file.md",
+      "source_mtime": 1709000000,
+      "chunk_index": 0,
+      "chunk_hash": "abc123..."
+    },
+    {
+      "text": "chunk内容2",
+      "source_path": "/path/to/file.md",
+      "source_mtime": 1709000000,
+      "chunk_index": 1,
+      "chunk_hash": "def456..."
+    }
+  ],
+  "user_id": "u1",
+  "agent_id": "a1",
+  "dry_run": false
+}
+```
+
+**响应**：
+```json
+{
+  "results": [
+    {
+      "chunk_hash": "abc123...",
+      "status": "inserted",
+      "chunk_id": "c_..."
+    },
+    {
+      "chunk_hash": "def456...",
+      "status": "skipped",
+      "reason": "duplicate"
+    }
+  ],
+  "total": 2,
+  "inserted": 1,
+  "skipped": 1,
+  "failed": 0
+}
+```
+
+**字段说明**：
+- `dry_run`: 可选，仅验证不写入
+- `status`: inserted / skipped / failed
+- `reason`: 跳过原因（duplicate / invalid等）
 
 ---
 
@@ -482,3 +571,4 @@ X-Memory-Mode: off|read|readwrite
 - [mem1与FreePool Router集成](./claw_mem1_router_integration.md)
 - [mem1实现指南](./claw_mem1_implementation.md)
 - [分阶段交付计划](./claw_mem1_phases.md)
+- [目录摄取工程方案](./claw_mem1_ingestion.md)

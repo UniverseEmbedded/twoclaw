@@ -3,6 +3,7 @@ import os
 import sqlite3
 import time
 import uuid
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -22,6 +23,9 @@ def _json_loads(s: str) -> Any:
 
 def _mk_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
 def _scope_where(user_id: str | None, agent_id: str | None, run_id: str | None) -> tuple[str, list[Any]]:
@@ -81,10 +85,23 @@ class SqliteStore:
                   chunk_index INTEGER NOT NULL,
                   chunk TEXT NOT NULL,
                   embedding_json TEXT NOT NULL,
-                  created_at INTEGER NOT NULL
+                  created_at INTEGER NOT NULL,
+                  source_path TEXT,
+                  source_mtime INTEGER,
+                  source_size INTEGER,
+                  embedding_model TEXT
                 );
                 """
             )
+            cols = {str(r["name"]) for r in con.execute("PRAGMA table_info(memo_chunks)").fetchall()}
+            if "source_path" not in cols:
+                con.execute("ALTER TABLE memo_chunks ADD COLUMN source_path TEXT;")
+            if "source_mtime" not in cols:
+                con.execute("ALTER TABLE memo_chunks ADD COLUMN source_mtime INTEGER;")
+            if "source_size" not in cols:
+                con.execute("ALTER TABLE memo_chunks ADD COLUMN source_size INTEGER;")
+            if "embedding_model" not in cols:
+                con.execute("ALTER TABLE memo_chunks ADD COLUMN embedding_model TEXT;")
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memory_history (
@@ -97,10 +114,175 @@ class SqliteStore:
                 );
                 """
             )
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ingest_state (
+                  source_path TEXT PRIMARY KEY,
+                  source_mtime INTEGER NOT NULL,
+                  source_size INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                );
+                """
+            )
             con.execute("CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(user_id, agent_id, run_id);")
             con.execute("CREATE INDEX IF NOT EXISTS idx_chunks_scope ON memo_chunks(memory_id);")
+            try:
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_chunks_source ON memo_chunks(source_path, chunk_index);"
+                )
+            except Exception:
+                pass
             con.execute("CREATE INDEX IF NOT EXISTS idx_history_mid ON memory_history(memory_id, created_at);")
             con.commit()
+        finally:
+            con.close()
+
+    def get_ingest_state(self, *, source_path: str) -> dict[str, Any] | None:
+        sp = str(source_path)
+        con = self._connect()
+        try:
+            r = con.execute(
+                "SELECT source_path,source_mtime,source_size,updated_at FROM ingest_state WHERE source_path = ?",
+                (sp,),
+            ).fetchone()
+            if r is None:
+                return None
+            return {
+                "source_path": r["source_path"],
+                "source_mtime": int(r["source_mtime"]),
+                "source_size": int(r["source_size"]),
+                "updated_at": int(r["updated_at"]),
+            }
+        finally:
+            con.close()
+
+    def upsert_ingest_state(self, *, source_path: str, source_mtime: int, source_size: int) -> None:
+        sp = str(source_path)
+        now = _now_s()
+        con = self._connect()
+        try:
+            con.execute(
+                """
+                INSERT INTO ingest_state(source_path,source_mtime,source_size,updated_at)
+                VALUES(?,?,?,?)
+                ON CONFLICT(source_path) DO UPDATE SET
+                  source_mtime=excluded.source_mtime,
+                  source_size=excluded.source_size,
+                  updated_at=excluded.updated_at
+                """,
+                (sp, int(source_mtime), int(source_size), now),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def delete_by_source_path(self, *, source_path: str) -> int:
+        sp = str(source_path)
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "SELECT DISTINCT memory_id FROM memo_chunks WHERE source_path = ?",
+                (sp,),
+            ).fetchall()
+            mem_ids = [str(r["memory_id"]) for r in rows]
+            if mem_ids:
+                qs = ",".join(["?"] * len(mem_ids))
+                con.execute(f"DELETE FROM memo_chunks WHERE memory_id IN ({qs})", mem_ids)
+                con.execute(f"DELETE FROM memory_history WHERE memory_id IN ({qs})", mem_ids)
+                con.execute(f"DELETE FROM memories WHERE id IN ({qs})", mem_ids)
+            con.execute("DELETE FROM memo_chunks WHERE source_path = ?", (sp,))
+            con.execute("DELETE FROM ingest_state WHERE source_path = ?", (sp,))
+            con.commit()
+            return len(mem_ids)
+        finally:
+            con.close()
+
+    def replace_file_chunks(
+        self,
+        *,
+        user_id: str | None,
+        agent_id: str | None,
+        run_id: str | None,
+        source_path: str,
+        source_mtime: int,
+        source_size: int,
+        embedding_model: str,
+        chunks: Sequence[str],
+        chunk_embeddings: Sequence[Sequence[float]],
+        metadata: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        sp = str(source_path)
+        now = _now_s()
+        meta = dict(metadata or {})
+        con = self._connect()
+        try:
+            old_rows = con.execute(
+                "SELECT DISTINCT memory_id FROM memo_chunks WHERE source_path = ?",
+                (sp,),
+            ).fetchall()
+            old_ids = [str(r["memory_id"]) for r in old_rows]
+            if old_ids:
+                qs = ",".join(["?"] * len(old_ids))
+                con.execute(f"DELETE FROM memo_chunks WHERE memory_id IN ({qs})", old_ids)
+                con.execute(f"DELETE FROM memory_history WHERE memory_id IN ({qs})", old_ids)
+                con.execute(f"DELETE FROM memories WHERE id IN ({qs})", old_ids)
+
+            inserted = 0
+            for i, (c, e) in enumerate(zip(chunks, chunk_embeddings)):
+                chash = _sha256_hex(f"{c}|{sp}|{int(i)}")
+                mid = f"m_{chash[:32]}"
+                cid = f"c_{chash[:32]}"
+                chunk_meta = dict(meta)
+                chunk_meta.update(
+                    {
+                        "source_path": sp,
+                        "source_mtime": int(source_mtime),
+                        "source_size": int(source_size),
+                        "chunk_index": int(i),
+                        "chunk_hash": chash,
+                        "embedding_model": str(embedding_model),
+                    }
+                )
+                con.execute(
+                    "INSERT OR REPLACE INTO memories(id,user_id,agent_id,run_id,memory,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (mid, user_id, agent_id, run_id, c, _json_dumps(chunk_meta), now, now),
+                )
+                con.execute(
+                    "INSERT OR REPLACE INTO memo_chunks(id,memory_id,chunk_index,chunk,embedding_json,created_at,source_path,source_mtime,source_size,embedding_model) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        cid,
+                        mid,
+                        int(i),
+                        c,
+                        _json_dumps(list(e)),
+                        now,
+                        sp,
+                        int(source_mtime),
+                        int(source_size),
+                        str(embedding_model),
+                    ),
+                )
+                inserted += 1
+
+            con.execute(
+                """
+                INSERT INTO ingest_state(source_path,source_mtime,source_size,updated_at)
+                VALUES(?,?,?,?)
+                ON CONFLICT(source_path) DO UPDATE SET
+                  source_mtime=excluded.source_mtime,
+                  source_size=excluded.source_size,
+                  updated_at=excluded.updated_at
+                """,
+                (sp, int(source_mtime), int(source_size), now),
+            )
+            con.commit()
+            return {
+                "source_path": sp,
+                "inserted": int(inserted),
+                "deleted": int(len(old_ids)),
+                "source_mtime": int(source_mtime),
+                "source_size": int(source_size),
+            }
         finally:
             con.close()
 
@@ -127,8 +309,8 @@ class SqliteStore:
             for i, (c, e) in enumerate(zip(chunks, chunk_embeddings)):
                 cid = _mk_id("c")
                 con.execute(
-                    "INSERT INTO memo_chunks(id,memory_id,chunk_index,chunk,embedding_json,created_at) VALUES(?,?,?,?,?,?)",
-                    (cid, mid, int(i), c, _json_dumps(list(e)), now),
+                    "INSERT INTO memo_chunks(id,memory_id,chunk_index,chunk,embedding_json,created_at,source_path,source_mtime,source_size,embedding_model) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (cid, mid, int(i), c, _json_dumps(list(e)), now, None, None, None, None),
                 )
             con.commit()
         finally:

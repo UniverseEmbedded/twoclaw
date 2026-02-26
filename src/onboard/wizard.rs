@@ -389,6 +389,7 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         auto_hydrate: true,
         sqlite_open_timeout_secs: None,
         qdrant: crate::config::QdrantConfig::default(),
+        mem1: crate::config::schema::Mem1BridgeConfig::default(),
     }
 }
 
