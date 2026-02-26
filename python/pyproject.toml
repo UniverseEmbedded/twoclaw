@@ -45,6 +45,7 @@ dependencies = [
 [project.scripts]
 zeroclaw-tools = "zeroclaw_tools.__main__:main"
 pool-router = "pool_router.__main__:main"
+mem1 = "mem1.__main__:main"
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.3.0"]
@@ -62,7 +63,7 @@ Repository = "https://github.com/zeroclaw-labs/zeroclaw"
 Issues = "https://github.com/zeroclaw-labs/zeroclaw/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["zeroclaw_tools", "pool_router"]
+packages = ["zeroclaw_tools", "pool_router", "mem1"]
 
 [tool.ruff]
 line-length = 100
@@ -71,3 +72,6 @@ target-version = "py310"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: live integration tests (may require network/credentials)",
+]

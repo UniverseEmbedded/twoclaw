@@ -1,65 +1,65 @@
-# Tài liệu ZeroClaw (Tiếng Việt)
+# ZeroClaw 文档（简体中文）
 
-Đây là trang chủ tiếng Việt của hệ thống tài liệu.
+这是文档系统的中文入口页。
 
-Đồng bộ lần cuối: **2026-02-21**.
+最后对齐：**2026-02-21**。
 
-> Lưu ý: Tên lệnh, khóa cấu hình và đường dẫn API giữ nguyên tiếng Anh. Khi có sai khác, tài liệu tiếng Anh là bản gốc.
+> 说明：命令名称、配置键和 API 路径保持英文。如有出入，以英文文档为准。
 
-## Tra cứu nhanh
+## 快速查找
 
-| Tôi muốn… | Xem tài liệu |
+| 我想要… | 查看文档 |
 |---|---|
-| Cài đặt và chạy nhanh | [../../../README.vi.md](../../../README.vi.md) / [../../../README.md](../../../README.md) |
-| Cài đặt bằng một lệnh | [one-click-bootstrap.md](one-click-bootstrap.md) |
-| Tìm lệnh theo tác vụ | [commands-reference.md](commands-reference.md) |
-| Kiểm tra giá trị mặc định và khóa cấu hình | [config-reference.md](config-reference.md) |
-| Kết nối provider / endpoint tùy chỉnh | [custom-providers.md](custom-providers.md) |
-| Cấu hình Z.AI / GLM provider | [zai-glm-setup.md](zai-glm-setup.md) |
-| Sử dụng tích hợp LangGraph | [langgraph-integration.md](langgraph-integration.md) |
-| Vận hành hàng ngày (runbook) | [operations-runbook.md](operations-runbook.md) |
-| Khắc phục sự cố cài đặt/chạy/kênh | [troubleshooting.md](troubleshooting.md) |
-| Cấu hình Matrix phòng mã hóa (E2EE) | [matrix-e2ee-guide.md](matrix-e2ee-guide.md) |
-| Xem theo danh mục | [SUMMARY.md](SUMMARY.md) |
-| Xem bản chụp PR/Issue | [project-triage-snapshot-2026-02-18.md](../../project-triage-snapshot-2026-02-18.md) |
+| 快速安装并运行 | [../../../README.md](../../../README.md) |
+| 一键安装与初始化 | [one-click-bootstrap.md](one-click-bootstrap.md) |
+| 按任务找命令 | [commands-reference.md](commands-reference.md) |
+| 快速查看配置默认值与关键项 | [config-reference.md](config-reference.md) |
+| 接入自定义 Provider / endpoint | [custom-providers.md](custom-providers.md) |
+| 配置 Z.AI / GLM Provider | [zai-glm-setup.md](zai-glm-setup.md) |
+| 使用 LangGraph 工具调用集成 | [langgraph-integration.md](langgraph-integration.md) |
+| 进行日常运维（runbook） | [operations-runbook.md](operations-runbook.md) |
+| 快速排查安装/运行/频道问题 | [troubleshooting.md](troubleshooting.md) |
+| 配置 Matrix 加密房间（E2EE） | [matrix-e2ee-guide.md](matrix-e2ee-guide.md) |
+| 按分类浏览 | [SUMMARY.md](SUMMARY.md) |
+| 查看 PR/Issue 快照 | [project-triage-snapshot-2026-02-18.md](../../project-triage-snapshot-2026-02-18.md) |
 
-## Tìm nhanh
+## 快速导航
 
-- Cài đặt lần đầu hoặc khởi động nhanh → [getting-started/README.md](getting-started/README.md)
-- Cần tra cứu lệnh CLI / khóa cấu hình → [reference/README.md](reference/README.md)
-- Cần vận hành / triển khai sản phẩm → [operations/README.md](operations/README.md)
-- Gặp lỗi hoặc hồi quy → [troubleshooting.md](troubleshooting.md)
-- Tìm hiểu bảo mật và lộ trình → [security/README.md](security/README.md)
-- Làm việc với bo mạch / thiết bị ngoại vi → [hardware/README.md](hardware/README.md)
-- Đóng góp / review / quy trình CI → [contributing/README.md](contributing/README.md)
-- Xem toàn bộ bản đồ tài liệu → [SUMMARY.md](SUMMARY.md)
+- 首次安装或快速启动 → [getting-started/README.md](getting-started/README.md)
+- 需要精确命令或配置键 → [reference/README.md](reference/README.md)
+- 需要生产/服务运维 → [operations/README.md](operations/README.md)
+- 遇到报错、异常或回归 → [troubleshooting.md](troubleshooting.md)
+- 查看安全现状与路线图 → [security/README.md](security/README.md)
+- 接入板卡与外设 → [hardware/README.md](hardware/README.md)
+- 参与贡献、评审与 CI → [contributing/README.md](contributing/README.md)
+- 查看完整文档地图 → [SUMMARY.md](SUMMARY.md)
 
-## Theo danh mục
+## 按分类浏览
 
-- Bắt đầu: [getting-started/README.md](getting-started/README.md)
-- Tra cứu: [reference/README.md](reference/README.md)
-- Vận hành & triển khai: [operations/README.md](operations/README.md)
-- Bảo mật: [security/README.md](security/README.md)
-- Phần cứng & ngoại vi: [hardware/README.md](hardware/README.md)
-- Đóng góp & CI: [contributing/README.md](contributing/README.md)
-- Ảnh chụp dự án: [project/README.md](project/README.md)
+- 入门文档：[getting-started/README.md](getting-started/README.md)
+- 参考手册：[reference/README.md](reference/README.md)
+- 运维与部署：[operations/README.md](operations/README.md)
+- 安全文档：[security/README.md](security/README.md)
+- 硬件与外设：[hardware/README.md](hardware/README.md)
+- 贡献与 CI：[contributing/README.md](contributing/README.md)
+- 项目快照：[project/README.md](project/README.md)
 
-## Theo vai trò
+## 按角色
 
-### Người dùng / Vận hành
+### 用户 / 运维
 
-- [commands-reference.md](commands-reference.md) — tra cứu lệnh theo tác vụ
-- [providers-reference.md](providers-reference.md) — ID provider, bí danh, biến môi trường xác thực
-- [channels-reference.md](channels-reference.md) — khả năng kênh và hướng dẫn thiết lập
-- [matrix-e2ee-guide.md](matrix-e2ee-guide.md) — thiết lập phòng mã hóa Matrix (E2EE)
-- [config-reference.md](config-reference.md) — khóa cấu hình quan trọng và giá trị mặc định an toàn
-- [custom-providers.md](custom-providers.md) — mẫu tích hợp provider / base URL tùy chỉnh
-- [zai-glm-setup.md](zai-glm-setup.md) — thiết lập Z.AI/GLM và ma trận endpoint
-- [langgraph-integration.md](langgraph-integration.md) — tích hợp dự phòng cho model/tool-calling
-- [operations-runbook.md](operations-runbook.md) — vận hành runtime hàng ngày và quy trình rollback
-- [troubleshooting.md](troubleshooting.md) — dấu hiệu lỗi thường gặp và cách khắc phục
+- [commands-reference.md](commands-reference.md) — 按任务查找命令
+- [providers-reference.md](providers-reference.md) — Provider ID、别名、认证环境变量
+- [channels-reference.md](channels-reference.md) — 频道功能和设置指南
+- [matrix-e2ee-guide.md](matrix-e2ee-guide.md) — Matrix 加密房间（E2EE）设置
+- [config-reference.md](config-reference.md) — 重要配置键和安全默认值
+- [custom-providers.md](custom-providers.md) — 自定义 Provider / 基础 URL 集成模板
+- [zai-glm-setup.md](zai-glm-setup.md) — Z.AI/GLM 设置和端点矩阵
+- [langgraph-integration.md](langgraph-integration.md) — 模型/工具调用回退集成
+- [operations-runbook.md](operations-runbook.md) — 日常运行时运维和回滚流程
+- [troubleshooting.md](troubleshooting.md) — 常见错误特征和恢复步骤
 
-### Người đóng góp / Bảo trì
+### 贡献者 / 维护者
 
 - [CONTRIBUTING.md](../../../CONTRIBUTING.md)
 - [pr-workflow.md](pr-workflow.md)
@@ -67,9 +67,9 @@
 - [ci-map.md](ci-map.md)
 - [actions-source-policy.md](actions-source-policy.md)
 
-### Bảo mật / Độ tin cậy
+### 安全 / 可靠性
 
-> Lưu ý: Mục này gồm tài liệu đề xuất/lộ trình, có thể chứa lệnh hoặc cấu hình chưa triển khai. Để biết hành vi thực tế, xem [config-reference.md](config-reference.md), [operations-runbook.md](operations-runbook.md) và [troubleshooting.md](troubleshooting.md) trước.
+> 说明：本分组内有 proposal/roadmap 文档，可能包含设想中的命令或配置。当前可执行行为请优先阅读 [config-reference.md](config-reference.md)、[operations-runbook.md](operations-runbook.md) 和 [troubleshooting.md](troubleshooting.md)。
 
 - [security/README.md](security/README.md)
 - [agnostic-security.md](agnostic-security.md)
@@ -79,16 +79,12 @@
 - [resource-limits.md](resource-limits.md)
 - [security-roadmap.md](security-roadmap.md)
 
-## Quản lý tài liệu
+## 文档管理
 
-- Mục lục thống nhất (TOC): [SUMMARY.md](SUMMARY.md)
-- Bản đồ cấu trúc docs (ngôn ngữ/phần/chức năng): [../../structure/README.md](../../structure/README.md)
-- Danh mục và phân loại tài liệu: [docs-inventory.md](../../docs-inventory.md)
+- 统一目录（TOC）：[SUMMARY.md](SUMMARY.md)
+- 文档结构图（语言/分区/功能）：[../../structure/README.md](../../structure/README.md)
+- 文档清单与分类：[docs-inventory.md](../../docs-inventory.md)
 
-## Ngôn ngữ khác
+## 其他语言
 
 - English: [README.md](../../README.md)
-- 简体中文: [README.zh-CN.md](../../README.zh-CN.md)
-- 日本語: [README.ja.md](../../README.ja.md)
-- Русский: [README.ru.md](../../README.ru.md)
-- Français: [README.fr.md](../../README.fr.md)
