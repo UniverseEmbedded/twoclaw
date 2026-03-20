@@ -41,6 +41,8 @@ class Mem1Settings:
     gemini_api_key: str
     chunk_size: int
     chunk_overlap: int
+    router_base_url: str
+    proxy_timeout_secs: int
 
     @classmethod
     def from_env(cls) -> "Mem1Settings":
@@ -61,6 +63,8 @@ class Mem1Settings:
             gemini_api_key=os.environ.get("MEM1_GEMINI_API_KEY") or "",
             chunk_size=int(os.environ.get("MEM1_CHUNK_SIZE") or "500"),
             chunk_overlap=int(os.environ.get("MEM1_CHUNK_OVERLAP") or "50"),
+            router_base_url=(os.environ.get("MEM1_ROUTER_BASE_URL") or "http://127.0.0.1:8000").strip(),
+            proxy_timeout_secs=int(os.environ.get("MEM1_PROXY_TIMEOUT_SECS") or "120"),
         )
 
 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import mem0_router, mem1_router
+from .api import mem0_router, mem1_router, openai_proxy_router
 from .config import Mem1Settings
 from .service import Mem1Service
 
@@ -21,6 +21,7 @@ def create_app(*, settings: Mem1Settings | None = None) -> FastAPI:
     app.state.mem1_service = Mem1Service(settings=s)
     app.include_router(mem0_router, tags=["mem0-compat"])
     app.include_router(mem1_router, tags=["mem1-enhanced"])
+    app.include_router(openai_proxy_router, tags=["openai-proxy"])
     return app
 
 

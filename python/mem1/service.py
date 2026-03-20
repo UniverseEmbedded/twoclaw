@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 from pathlib import Path
 
-from .algorithms import chunk_text, cosine_similarity
+from .algorithms import chunk_text, cosine_similarity, deduplicate_results
 from .config import Mem1Settings, RuntimeConfig
 from .embedder import Embedder, GeminiEmbedder, HashEmbedder
 from .store import SqliteStore
@@ -28,6 +28,16 @@ def _messages_to_memory(messages: Sequence[Mapping[str, Any]]) -> str:
             continue
         parts.append(f"{role}: {content}")
     return "\n".join(parts).strip()
+
+
+def _deduplication_threshold(rag_params: Any) -> float:
+    if isinstance(rag_params, Mapping):
+        kb = rag_params.get("KnowledgeBaseManager")
+        if isinstance(kb, Mapping):
+            raw = kb.get("deduplicationThreshold")
+            if isinstance(raw, (int, float)):
+                return max(0.0, min(1.0, float(raw)))
+    return 0.88
 
 
 @dataclass
@@ -270,21 +280,35 @@ class Mem1Service:
         if not q:
             return []
         limit = max(1, min(100, int(limit)))
+        candidate_limit = max(limit, min(300, limit * 3))
         embedder = self._build_embedder()
         q_emb = embedder.embed_texts([q])[0]
 
         mids = self._store.select_memory_ids_for_scope(user_id=user_id, agent_id=agent_id, run_id=run_id)
-        best: dict[str, float] = {}
+        best: dict[str, tuple[float, list[float]]] = {}
         for row in self._store.iter_chunk_rows(memory_ids=mids):
             score = cosine_similarity(q_emb, row["embedding"])
             mid = str(row["memory_id"])
             cur = best.get(mid)
-            if cur is None or score > cur:
-                best[mid] = float(score)
+            if cur is None or score > cur[0]:
+                best[mid] = (float(score), list(row["embedding"]))
 
-        ranked = sorted(best.items(), key=lambda x: x[1], reverse=True)[:limit]
+        ranked = sorted(best.items(), key=lambda x: x[1][0], reverse=True)[:candidate_limit]
+        threshold = _deduplication_threshold(self.runtime_config.rag_params)
+        dedup_candidates = [
+            {"memory_id": mid, "score": sc[0], "embedding": sc[1]}
+            for mid, sc in ranked
+        ]
+        deduped = deduplicate_results(
+            dedup_candidates,
+            query_vector=q_emb,
+            top_k=limit,
+            threshold=threshold,
+        )
         out: list[dict[str, Any]] = []
-        for mid, score in ranked:
+        for item in deduped:
+            mid = str(item["memory_id"])
+            score = float(item["score"])
             it = self._store.get_memory(mid)
             if it is None:
                 continue

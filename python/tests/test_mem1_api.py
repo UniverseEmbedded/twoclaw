@@ -20,6 +20,8 @@ def _test_settings(tmp_path: Path) -> Mem1Settings:
         gemini_api_key="",
         chunk_size=200,
         chunk_overlap=20,
+        router_base_url="http://127.0.0.1:18000",
+        proxy_timeout_secs=5,
     )
 
 
