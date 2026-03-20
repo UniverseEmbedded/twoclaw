@@ -65,11 +65,12 @@ Lưu ý cho người dùng container:
 
 | Khóa | Mặc định | Mục đích |
 |---|---|---|
-| `compact_context` | `false` | Khi bật: bootstrap_max_chars=6000, rag_chunk_limit=2. Dùng cho model 13B trở xuống |
+| `compact_context` | `true` | Khi bật: bootstrap_max_chars=6000, rag_chunk_limit=2. Dùng cho model 13B trở xuống |
 | `max_tool_iterations` | `10` | Số vòng lặp tool-call tối đa mỗi tin nhắn trên CLI, gateway và channels |
 | `max_history_messages` | `50` | Số tin nhắn lịch sử tối đa giữ lại mỗi phiên |
 | `parallel_tools` | `false` | Bật thực thi tool song song trong một lượt |
 | `tool_dispatcher` | `auto` | Chiến lược dispatch tool |
+| `tool_call_dedup_exempt` | `[]` | Tên tool được miễn kiểm tra trùng lặp trong cùng một lượt |
 
 Lưu ý:
 
@@ -77,6 +78,7 @@ Lưu ý:
 - Nếu tin nhắn kênh vượt giá trị này, runtime trả về: `Agent exceeded maximum tool iterations (<value>)`.
 - Trong vòng lặp tool của CLI, gateway và channel, các lời gọi tool độc lập được thực thi đồng thời mặc định khi không cần phê duyệt; thứ tự kết quả giữ ổn định.
 - `parallel_tools` áp dụng cho API `Agent::turn()`. Không ảnh hưởng đến vòng lặp runtime của CLI, gateway hay channel.
+- `tool_call_dedup_exempt` nhận mảng tên tool chính xác. Các tool trong danh sách được phép gọi nhiều lần với cùng tham số trong một lượt. Ví dụ: `tool_call_dedup_exempt = ["browser"]`.
 
 ## `[agents.<name>]`
 

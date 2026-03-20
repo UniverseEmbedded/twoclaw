@@ -1,6 +1,8 @@
+#[cfg(feature = "channel-nostr")]
+use crate::config::schema::{default_nostr_relays, NostrConfig};
 use crate::config::schema::{
-    default_nostr_relays, DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig,
-    NextcloudTalkConfig, NostrConfig, QQConfig, SignalConfig, StreamMode, WhatsAppConfig,
+    DingTalkConfig, IrcConfig, LarkReceiveMode, LinqConfig, NextcloudTalkConfig, QQConfig,
+    SignalConfig, StreamMode, WhatsAppConfig,
 };
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
@@ -93,7 +95,7 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
     match resolve_interactive_onboarding_mode(&config_path, force)? {
         InteractiveOnboardingMode::FullOnboarding => {}
         InteractiveOnboardingMode::UpdateProviderOnly => {
-            return run_provider_update_wizard(&workspace_dir, &config_path).await;
+            return Box::pin(run_provider_update_wizard(&workspace_dir, &config_path)).await;
         }
     }
 
@@ -132,13 +134,21 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
             Some(api_key)
         },
         api_url: provider_api_url,
+        api_path: None,
         default_provider: Some(provider),
         default_model: Some(model),
         model_providers: std::collections::HashMap::new(),
         default_temperature: 0.7,
+        provider_timeout_secs: 120,
+        extra_headers: std::collections::HashMap::new(),
         observability: ObservabilityConfig::default(),
         autonomy: AutonomyConfig::default(),
+        backup: crate::config::BackupConfig::default(),
+        data_retention: crate::config::DataRetentionConfig::default(),
+        cloud_ops: crate::config::CloudOpsConfig::default(),
+        conversational_ai: crate::config::ConversationalAiConfig::default(),
         security: crate::config::SecurityConfig::default(),
+        security_ops: crate::config::SecurityOpsConfig::default(),
         runtime: RuntimeConfig::default(),
         reliability: crate::config::ReliabilityConfig::default(),
         scheduler: crate::config::schema::SchedulerConfig::default(),
@@ -154,21 +164,38 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
         tunnel: tunnel_config,
         gateway: crate::config::GatewayConfig::default(),
         composio: composio_config,
+        microsoft365: crate::config::Microsoft365Config::default(),
         secrets: secrets_config,
         browser: BrowserConfig::default(),
+        browser_delegate: crate::tools::browser_delegate::BrowserDelegateConfig::default(),
         http_request: crate::config::HttpRequestConfig::default(),
         multimodal: crate::config::MultimodalConfig::default(),
         web_fetch: crate::config::WebFetchConfig::default(),
         web_search: crate::config::WebSearchConfig::default(),
+        project_intel: crate::config::ProjectIntelConfig::default(),
+        google_workspace: crate::config::GoogleWorkspaceConfig::default(),
         proxy: crate::config::ProxyConfig::default(),
         identity: crate::config::IdentityConfig::default(),
         cost: crate::config::CostConfig::default(),
         peripherals: crate::config::PeripheralsConfig::default(),
+        delegate: crate::config::DelegateToolConfig::default(),
         agents: std::collections::HashMap::new(),
+        swarms: std::collections::HashMap::new(),
         hooks: crate::config::HooksConfig::default(),
         hardware: hardware_config,
         query_classification: crate::config::QueryClassificationConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
+        tts: crate::config::TtsConfig::default(),
+        mcp: crate::config::McpConfig::default(),
+        nodes: crate::config::NodesConfig::default(),
+        workspace: crate::config::WorkspaceConfig::default(),
+        notion: crate::config::NotionConfig::default(),
+        jira: crate::config::JiraConfig::default(),
+        node_transport: crate::config::NodeTransportConfig::default(),
+        knowledge: crate::config::KnowledgeConfig::default(),
+        linkedin: crate::config::LinkedInConfig::default(),
+        plugins: crate::config::PluginsConfig::default(),
+        locale: None,
     };
 
     println!(
@@ -228,7 +255,7 @@ pub async fn run_channels_repair_wizard() -> Result<Config> {
     );
     println!();
 
-    let mut config = Config::load_or_init().await?;
+    let mut config = Box::pin(Config::load_or_init()).await?;
 
     print_step(1, 1, "Channels (How You Talk to ZeroClaw)");
     config.channels_config = setup_channels()?;
@@ -352,7 +379,6 @@ fn apply_provider_update(
 
 /// Non-interactive setup: generates a sensible default config instantly.
 /// Use `zeroclaw onboard` or `zeroclaw onboard --api-key sk-... --provider openrouter --memory sqlite|lucid`.
-/// Use `zeroclaw onboard --interactive` for the full wizard.
 fn backend_key_from_choice(choice: usize) -> &'static str {
     selectable_memory_backends()
         .get(choice)
@@ -384,6 +410,7 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         response_cache_enabled: false,
         response_cache_ttl_minutes: 60,
         response_cache_max_entries: 5_000,
+        response_cache_hot_entries: 256,
         snapshot_enabled: false,
         snapshot_on_hygiene: false,
         auto_hydrate: true,
@@ -405,14 +432,14 @@ pub async fn run_quick_setup(
         .map(|u| u.home_dir().to_path_buf())
         .context("Could not find home directory")?;
 
-    run_quick_setup_with_home(
+    Box::pin(run_quick_setup_with_home(
         credential_override,
         provider,
         model_override,
         memory_backend,
         force,
         &home,
-    )
+    ))
     .await
 }
 
@@ -420,7 +447,7 @@ fn resolve_quick_setup_dirs_with_home(home: &Path) -> (PathBuf, PathBuf) {
     if let Ok(custom_config_dir) = std::env::var("ZEROCLAW_CONFIG_DIR") {
         let trimmed = custom_config_dir.trim();
         if !trimmed.is_empty() {
-            let config_dir = PathBuf::from(trimmed);
+            let config_dir = PathBuf::from(shellexpand::tilde(trimmed).as_ref());
             return (config_dir.clone(), config_dir.join("workspace"));
         }
     }
@@ -428,14 +455,56 @@ fn resolve_quick_setup_dirs_with_home(home: &Path) -> (PathBuf, PathBuf) {
     if let Ok(custom_workspace) = std::env::var("ZEROCLAW_WORKSPACE") {
         let trimmed = custom_workspace.trim();
         if !trimmed.is_empty() {
+            let expanded = shellexpand::tilde(trimmed);
             return crate::config::schema::resolve_config_dir_for_workspace(&PathBuf::from(
-                trimmed,
+                expanded.as_ref(),
             ));
         }
     }
 
     let config_dir = home.join(".zeroclaw");
     (config_dir.clone(), config_dir.join("workspace"))
+}
+
+fn homebrew_prefix_for_exe(exe: &Path) -> Option<&'static str> {
+    let exe = exe.to_string_lossy();
+    if exe == "/opt/homebrew/bin/zeroclaw"
+        || exe.starts_with("/opt/homebrew/Cellar/zeroclaw/")
+        || exe.starts_with("/opt/homebrew/opt/zeroclaw/")
+    {
+        return Some("/opt/homebrew");
+    }
+
+    if exe == "/usr/local/bin/zeroclaw"
+        || exe.starts_with("/usr/local/Cellar/zeroclaw/")
+        || exe.starts_with("/usr/local/opt/zeroclaw/")
+    {
+        return Some("/usr/local");
+    }
+
+    None
+}
+
+fn quick_setup_homebrew_service_note(
+    config_path: &Path,
+    workspace_dir: &Path,
+    exe: &Path,
+) -> Option<String> {
+    let prefix = homebrew_prefix_for_exe(exe)?;
+    let service_root = Path::new(prefix).join("var").join("zeroclaw");
+    let service_config = service_root.join("config.toml");
+    let service_workspace = service_root.join("workspace");
+
+    if config_path == service_config || workspace_dir == service_workspace {
+        return None;
+    }
+
+    Some(format!(
+        "Homebrew service note: `brew services` uses {} (config {}) by default. Your onboarding just wrote {}. If you plan to run ZeroClaw as a service, copy or link this workspace first.",
+        service_workspace.display(),
+        service_config.display(),
+        config_path.display(),
+    ))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -484,13 +553,21 @@ async fn run_quick_setup_with_home(
             s
         }),
         api_url: None,
+        api_path: None,
         default_provider: Some(provider_name.clone()),
         default_model: Some(model.clone()),
         model_providers: std::collections::HashMap::new(),
         default_temperature: 0.7,
+        provider_timeout_secs: 120,
+        extra_headers: std::collections::HashMap::new(),
         observability: ObservabilityConfig::default(),
         autonomy: AutonomyConfig::default(),
+        backup: crate::config::BackupConfig::default(),
+        data_retention: crate::config::DataRetentionConfig::default(),
+        cloud_ops: crate::config::CloudOpsConfig::default(),
+        conversational_ai: crate::config::ConversationalAiConfig::default(),
         security: crate::config::SecurityConfig::default(),
+        security_ops: crate::config::SecurityOpsConfig::default(),
         runtime: RuntimeConfig::default(),
         reliability: crate::config::ReliabilityConfig::default(),
         scheduler: crate::config::schema::SchedulerConfig::default(),
@@ -506,21 +583,38 @@ async fn run_quick_setup_with_home(
         tunnel: crate::config::TunnelConfig::default(),
         gateway: crate::config::GatewayConfig::default(),
         composio: ComposioConfig::default(),
+        microsoft365: crate::config::Microsoft365Config::default(),
         secrets: SecretsConfig::default(),
         browser: BrowserConfig::default(),
+        browser_delegate: crate::tools::browser_delegate::BrowserDelegateConfig::default(),
         http_request: crate::config::HttpRequestConfig::default(),
         multimodal: crate::config::MultimodalConfig::default(),
         web_fetch: crate::config::WebFetchConfig::default(),
         web_search: crate::config::WebSearchConfig::default(),
+        project_intel: crate::config::ProjectIntelConfig::default(),
+        google_workspace: crate::config::GoogleWorkspaceConfig::default(),
         proxy: crate::config::ProxyConfig::default(),
         identity: crate::config::IdentityConfig::default(),
         cost: crate::config::CostConfig::default(),
         peripherals: crate::config::PeripheralsConfig::default(),
+        delegate: crate::config::DelegateToolConfig::default(),
         agents: std::collections::HashMap::new(),
+        swarms: std::collections::HashMap::new(),
         hooks: crate::config::HooksConfig::default(),
         hardware: crate::config::HardwareConfig::default(),
         query_classification: crate::config::QueryClassificationConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
+        tts: crate::config::TtsConfig::default(),
+        mcp: crate::config::McpConfig::default(),
+        nodes: crate::config::NodesConfig::default(),
+        workspace: crate::config::WorkspaceConfig::default(),
+        notion: crate::config::NotionConfig::default(),
+        jira: crate::config::JiraConfig::default(),
+        node_transport: crate::config::NodeTransportConfig::default(),
+        knowledge: crate::config::KnowledgeConfig::default(),
+        linkedin: crate::config::LinkedInConfig::default(),
+        plugins: crate::config::PluginsConfig::default(),
+        locale: None,
     };
 
     config.save().await?;
@@ -602,6 +696,16 @@ async fn run_quick_setup_with_home(
         style("Config saved:").white().bold(),
         style(config_path.display()).green()
     );
+    if cfg!(target_os = "macos") {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(note) =
+                quick_setup_homebrew_service_note(&config_path, &workspace_dir, &exe)
+            {
+                println!();
+                println!("  {}", style(note).yellow());
+            }
+        }
+    }
     println!();
     println!("  {}", style("Next steps:").white().bold());
     if credential_override.is_none() {
@@ -680,10 +784,15 @@ fn allows_unauthenticated_model_fetch(provider_name: &str) -> bool {
 }
 
 /// Pick a sensible default model for the given provider.
-const MINIMAX_ONBOARD_MODELS: [(&str, &str); 5] = [
-    ("MiniMax-M2.5", "MiniMax M2.5 (latest, recommended)"),
+const MINIMAX_ONBOARD_MODELS: [(&str, &str); 7] = [
+    (
+        "MiniMax-M2.7",
+        "MiniMax M2.7 (latest flagship, recommended)",
+    ),
+    ("MiniMax-M2.7-highspeed", "MiniMax M2.7 High-Speed (faster)"),
+    ("MiniMax-M2.5", "MiniMax M2.5 (stable)"),
     ("MiniMax-M2.5-highspeed", "MiniMax M2.5 High-Speed (faster)"),
-    ("MiniMax-M2.1", "MiniMax M2.1 (stable)"),
+    ("MiniMax-M2.1", "MiniMax M2.1 (previous gen)"),
     ("MiniMax-M2.1-highspeed", "MiniMax M2.1 High-Speed (faster)"),
     ("MiniMax-M2", "MiniMax M2 (legacy)"),
 ];
@@ -700,17 +809,17 @@ fn default_model_for_provider(provider: &str) -> String {
         "xai" => "grok-4-1-fast-reasoning".into(),
         "perplexity" => "sonar-pro".into(),
         "fireworks" => "accounts/fireworks/models/llama-v3p3-70b-instruct".into(),
-        "novita" => "minimax/minimax-m2.5".into(),
+        "novita" => "minimax/minimax-m2.7".into(),
         "together-ai" => "meta-llama/Llama-3.3-70B-Instruct-Turbo".into(),
         "cohere" => "command-a-03-2025".into(),
         "moonshot" => "kimi-k2.5".into(),
         "glm" | "zai" => "glm-5".into(),
-        "minimax" => "MiniMax-M2.5".into(),
+        "minimax" => "MiniMax-M2.7".into(),
         "qwen" => "qwen-plus".into(),
         "qwen-code" => "qwen3-coder-plus".into(),
         "ollama" => "llama3.2".into(),
         "llamacpp" => "ggml-org/gpt-oss-20b-GGUF".into(),
-        "sglang" | "vllm" | "osaurus" => "default".into(),
+        "sglang" | "vllm" | "osaurus" | "opencode-go" => "default".into(),
         "gemini" => "gemini-2.5-pro".into(),
         "kimi-code" => "kimi-for-coding".into(),
         "bedrock" => "anthropic.claude-sonnet-4-5-20250929-v1:0".into(),
@@ -894,10 +1003,16 @@ fn curated_models_for_provider(provider_name: &str) -> Vec<(String, String)> {
                 "Mixtral 8x22B".to_string(),
             ),
         ],
-        "novita" => vec![(
-            "minimax/minimax-m2.5".to_string(),
-            "MiniMax M2.5".to_string(),
-        )],
+        "novita" => vec![
+            (
+                "minimax/minimax-m2.7".to_string(),
+                "MiniMax M2.7 (latest flagship)".to_string(),
+            ),
+            (
+                "minimax/minimax-m2.5".to_string(),
+                "MiniMax M2.5".to_string(),
+            ),
+        ],
         "together-ai" => vec![
             (
                 "meta-llama/Llama-3.3-70B-Instruct-Turbo".to_string(),
@@ -963,8 +1078,16 @@ fn curated_models_for_provider(provider_name: &str) -> Vec<(String, String)> {
         ],
         "minimax" => vec![
             (
+                "MiniMax-M2.7".to_string(),
+                "MiniMax M2.7 (latest flagship)".to_string(),
+            ),
+            (
+                "MiniMax-M2.7-highspeed".to_string(),
+                "MiniMax M2.7 High-Speed (fast)".to_string(),
+            ),
+            (
                 "MiniMax-M2.5".to_string(),
-                "MiniMax M2.5 (latest flagship)".to_string(),
+                "MiniMax M2.5 (stable)".to_string(),
             ),
             (
                 "MiniMax-M2.5-highspeed".to_string(),
@@ -972,7 +1095,7 @@ fn curated_models_for_provider(provider_name: &str) -> Vec<(String, String)> {
             ),
             (
                 "MiniMax-M2.1".to_string(),
-                "MiniMax M2.1 (strong coding/reasoning)".to_string(),
+                "MiniMax M2.1 (previous gen)".to_string(),
             ),
         ],
         "qwen" => vec![
@@ -1162,6 +1285,7 @@ fn supports_live_model_fetch(provider_name: &str) -> bool {
             | "zai"
             | "qwen"
             | "nvidia"
+            | "opencode-go"
     )
 }
 
@@ -1193,6 +1317,7 @@ fn models_endpoint_for_provider(provider_name: &str) -> Option<&'static str> {
             "sglang" => Some("http://localhost:30000/v1/models"),
             "vllm" => Some("http://localhost:8000/v1/models"),
             "osaurus" => Some("http://localhost:1337/v1/models"),
+            "opencode-go" => Some("https://opencode.ai/zen/go/v1/models"),
             _ => None,
         },
     }
@@ -1516,7 +1641,7 @@ fn fetch_live_models_for_provider(
                     "qwen3-coder-next:cloud".to_string(),
                     "qwen3-coder:480b:cloud".to_string(),
                     "kimi-k2.5:cloud".to_string(),
-                    "minimax-m2.5:cloud".to_string(),
+                    "minimax-m2.7:cloud".to_string(),
                     "deepseek-v3.1:671b:cloud".to_string(),
                 ]
             } else {
@@ -2005,7 +2130,7 @@ fn resolve_interactive_onboarding_mode(
             "  Existing config found at {}. Select setup mode",
             config_path.display()
         ))
-        .items(&options)
+        .items(options)
         .default(1)
         .interact()?;
 
@@ -2030,26 +2155,37 @@ fn ensure_onboard_overwrite_allowed(config_path: &Path, force: bool) -> Result<(
         return Ok(());
     }
 
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+    #[cfg(test)]
+    {
         bail!(
-            "Refusing to overwrite existing config at {} in non-interactive mode. Re-run with --force if overwrite is intentional.",
+            "Refusing to overwrite existing config at {} in test mode. Re-run with --force if overwrite is intentional.",
             config_path.display()
         );
     }
 
-    let confirmed = Confirm::new()
-        .with_prompt(format!(
-            "  Existing config found at {}. Re-running onboarding will overwrite config.toml and may create missing workspace files (including BOOTSTRAP.md). Continue?",
-            config_path.display()
-        ))
-        .default(false)
-        .interact()?;
+    #[cfg(not(test))]
+    {
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            bail!(
+                "Refusing to overwrite existing config at {} in non-interactive mode. Re-run with --force if overwrite is intentional.",
+                config_path.display()
+            );
+        }
 
-    if !confirmed {
-        bail!("Onboarding canceled: existing configuration was left unchanged.");
+        let confirmed = Confirm::new()
+            .with_prompt(format!(
+                "  Existing config found at {}. Re-running onboarding will overwrite config.toml and may create missing workspace files (including BOOTSTRAP.md). Continue?",
+                config_path.display()
+            ))
+            .default(false)
+            .interact()?;
+
+        if !confirmed {
+            bail!("Onboarding canceled: existing configuration was left unchanged.");
+        }
+
+        Ok(())
     }
-
-    Ok(())
 }
 
 async fn persist_workspace_selection(config_path: &Path) -> Result<()> {
@@ -2194,6 +2330,7 @@ async fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String,
             ("zai-cn", "Z.AI — China coding endpoint (open.bigmodel.cn)"),
             ("synthetic", "Synthetic — Synthetic AI models"),
             ("opencode", "OpenCode Zen — code-focused AI"),
+            ("opencode-go", "OpenCode Go — Subsidized code-focused AI"),
             ("cohere", "Cohere — Command R+ & embeddings"),
         ],
         4 => local_provider_choices(),
@@ -2878,6 +3015,7 @@ fn provider_env_var(name: &str) -> &'static str {
         "zai" => "ZAI_API_KEY",
         "synthetic" => "SYNTHETIC_API_KEY",
         "opencode" | "opencode-zen" => "OPENCODE_API_KEY",
+        "opencode-go" => "OPENCODE_GO_API_KEY",
         "vercel" | "vercel-ai" => "VERCEL_API_KEY",
         "cloudflare" | "cloudflare-ai" => "CLOUDFLARE_API_KEY",
         "bedrock" | "aws-bedrock" => "AWS_ACCESS_KEY_ID",
@@ -3336,6 +3474,7 @@ enum ChannelMenuChoice {
     QqOfficial,
     Lark,
     Feishu,
+    #[cfg(feature = "channel-nostr")]
     Nostr,
     Done,
 }
@@ -3356,6 +3495,7 @@ const CHANNEL_MENU_CHOICES: &[ChannelMenuChoice] = &[
     ChannelMenuChoice::QqOfficial,
     ChannelMenuChoice::Lark,
     ChannelMenuChoice::Feishu,
+    #[cfg(feature = "channel-nostr")]
     ChannelMenuChoice::Nostr,
     ChannelMenuChoice::Done,
 ];
@@ -3499,6 +3639,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                         "— Feishu Bot"
                     }
                 ),
+                #[cfg(feature = "channel-nostr")]
                 ChannelMenuChoice::Nostr => format!(
                     "Nostr {}",
                     if config.nostr.is_some() {
@@ -3619,6 +3760,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     draft_update_interval_ms: 1000,
                     interrupt_on_new_message: false,
                     mention_only: false,
+                    ack_reactions: None,
                 });
             }
             ChannelMenuChoice::Discord => {
@@ -3717,6 +3859,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     guild_id: if guild.is_empty() { None } else { Some(guild) },
                     allowed_users,
                     listen_to_bots: false,
+                    interrupt_on_new_message: false,
                     mention_only: false,
                 });
             }
@@ -3845,6 +3988,9 @@ fn setup_channels() -> Result<ChannelsConfig> {
                         Some(channel)
                     },
                     allowed_users,
+                    interrupt_on_new_message: false,
+                    thread_replies: None,
+                    mention_only: false,
                 });
             }
             ChannelMenuChoice::IMessage => {
@@ -4115,6 +4261,23 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     .interact()?;
 
                 if mode_idx == 0 {
+                    // Compile-time check: warn early if the feature is not enabled.
+                    #[cfg(not(feature = "whatsapp-web"))]
+                    {
+                        println!();
+                        println!(
+                            "  {} {}",
+                            style("⚠").yellow().bold(),
+                            style("The 'whatsapp-web' feature is not compiled in. WhatsApp Web will not work at runtime.").yellow()
+                        );
+                        println!(
+                            "  {} Rebuild with: {}",
+                            style("→").dim(),
+                            style("cargo build --features whatsapp-web").white().bold()
+                        );
+                        println!();
+                    }
+
                     println!("  {}", style("Mode: WhatsApp Web").dim());
                     print_bullet("1. Build with --features whatsapp-web");
                     print_bullet(
@@ -4530,6 +4693,10 @@ fn setup_channels() -> Result<ChannelsConfig> {
 
                 config.webhook = Some(WebhookConfig {
                     port: port.parse().unwrap_or(8080),
+                    listen_path: None,
+                    send_url: None,
+                    send_method: None,
+                    auth_header: None,
                     secret: if secret.is_empty() {
                         None
                     } else {
@@ -4944,6 +5111,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     port,
                 });
             }
+            #[cfg(feature = "channel-nostr")]
             ChannelMenuChoice::Nostr => {
                 // ── Nostr ──
                 println!();
@@ -5276,7 +5444,7 @@ async fn scaffold_workspace(workspace_dir: &Path, ctx: &ProjectContext) -> Resul
          Participate, don't dominate. Respond when mentioned or when you add genuine value.\n\
          Stay silent when it's casual banter or someone already answered.\n\n\
          ## Tools & Skills\n\n\
-         Skills are listed in the system prompt. Use `read` on a skill's SKILL.md for details.\n\
+         Skills are listed in the system prompt. Use `read_skill` when available, or `file_read` on a skill file, for full details.\n\
          Keep local notes (SSH hosts, device names, etc.) in `TOOLS.md`.\n\n\
          ## Crash Recovery\n\n\
          - If a run stops unexpectedly, recover context before acting.\n\
@@ -5815,7 +5983,7 @@ mod tests {
         apply_provider_update(
             &mut config,
             "anthropic".to_string(),
-            "".to_string(),
+            String::new(),
             "claude-sonnet-4-5-20250929".to_string(),
             None,
         );
@@ -5836,14 +6004,14 @@ mod tests {
         let _config_env = EnvVarGuard::unset("ZEROCLAW_CONFIG_DIR");
         let tmp = TempDir::new().unwrap();
 
-        let config = run_quick_setup_with_home(
+        let config = Box::pin(run_quick_setup_with_home(
             Some("sk-issue946"),
             Some("openrouter"),
             Some("custom-model-946"),
             Some("sqlite"),
             false,
             tmp.path(),
-        )
+        ))
         .await
         .unwrap();
 
@@ -5863,14 +6031,14 @@ mod tests {
         let _config_env = EnvVarGuard::unset("ZEROCLAW_CONFIG_DIR");
         let tmp = TempDir::new().unwrap();
 
-        let config = run_quick_setup_with_home(
+        let config = Box::pin(run_quick_setup_with_home(
             Some("sk-issue946"),
             Some("anthropic"),
             None,
             Some("sqlite"),
             false,
             tmp.path(),
-        )
+        ))
         .await
         .unwrap();
 
@@ -5893,14 +6061,14 @@ mod tests {
             .await
             .unwrap();
 
-        let err = run_quick_setup_with_home(
+        let err = Box::pin(run_quick_setup_with_home(
             Some("sk-existing"),
             Some("openrouter"),
             Some("custom-model"),
             Some("sqlite"),
             false,
             tmp.path(),
-        )
+        ))
         .await
         .expect_err("quick setup should refuse overwrite without --force");
 
@@ -5926,14 +6094,14 @@ mod tests {
         .await
         .unwrap();
 
-        let config = run_quick_setup_with_home(
+        let config = Box::pin(run_quick_setup_with_home(
             Some("sk-force"),
             Some("openrouter"),
             Some("custom-model-fresh"),
             Some("sqlite"),
             true,
             tmp.path(),
-        )
+        ))
         .await
         .expect("quick setup should overwrite existing config with --force");
 
@@ -5960,19 +6128,65 @@ mod tests {
         );
         let _config_env = EnvVarGuard::unset("ZEROCLAW_CONFIG_DIR");
 
-        let config = run_quick_setup_with_home(
+        let config = Box::pin(run_quick_setup_with_home(
             Some("sk-env"),
             Some("openrouter"),
             Some("model-env"),
             Some("sqlite"),
             false,
             tmp.path(),
-        )
+        ))
         .await
         .expect("quick setup should honor ZEROCLAW_WORKSPACE");
 
         assert_eq!(config.workspace_dir, workspace_dir);
         assert_eq!(config.config_path, expected_config_path);
+    }
+
+    #[test]
+    fn homebrew_prefix_for_exe_detects_supported_layouts() {
+        assert_eq!(
+            homebrew_prefix_for_exe(Path::new("/opt/homebrew/bin/zeroclaw")),
+            Some("/opt/homebrew")
+        );
+        assert_eq!(
+            homebrew_prefix_for_exe(Path::new(
+                "/opt/homebrew/Cellar/zeroclaw/0.5.0/bin/zeroclaw",
+            )),
+            Some("/opt/homebrew")
+        );
+        assert_eq!(
+            homebrew_prefix_for_exe(Path::new("/usr/local/bin/zeroclaw")),
+            Some("/usr/local")
+        );
+        assert_eq!(homebrew_prefix_for_exe(Path::new("/tmp/zeroclaw")), None);
+    }
+
+    #[test]
+    fn quick_setup_homebrew_service_note_mentions_service_workspace() {
+        let note = quick_setup_homebrew_service_note(
+            Path::new("/Users/alix/.zeroclaw/config.toml"),
+            Path::new("/Users/alix/.zeroclaw/workspace"),
+            Path::new("/opt/homebrew/bin/zeroclaw"),
+        )
+        .expect("homebrew installs should emit a service workspace note");
+
+        assert!(note.contains("/opt/homebrew/var/zeroclaw/workspace"));
+        assert!(note.contains("/opt/homebrew/var/zeroclaw/config.toml"));
+        assert!(note.contains("/Users/alix/.zeroclaw/config.toml"));
+    }
+
+    #[test]
+    fn quick_setup_homebrew_service_note_skips_matching_service_layout() {
+        let service_config = Path::new("/opt/homebrew/var/zeroclaw/config.toml");
+        let service_workspace = Path::new("/opt/homebrew/var/zeroclaw/workspace");
+
+        assert!(quick_setup_homebrew_service_note(
+            service_config,
+            service_workspace,
+            Path::new("/opt/homebrew/bin/zeroclaw"),
+        )
+        .is_none());
     }
 
     // ── scaffold_workspace: basic file creation ─────────────────
@@ -6457,7 +6671,7 @@ mod tests {
         assert_eq!(default_model_for_provider("qwen-intl"), "qwen-plus");
         assert_eq!(default_model_for_provider("qwen-code"), "qwen3-coder-plus");
         assert_eq!(default_model_for_provider("glm-cn"), "glm-5");
-        assert_eq!(default_model_for_provider("minimax-cn"), "MiniMax-M2.5");
+        assert_eq!(default_model_for_provider("minimax-cn"), "MiniMax-M2.7");
         assert_eq!(default_model_for_provider("zai-cn"), "glm-5");
         assert_eq!(default_model_for_provider("gemini"), "gemini-2.5-pro");
         assert_eq!(default_model_for_provider("google"), "gemini-2.5-pro");
@@ -7050,6 +7264,7 @@ mod tests {
         assert_eq!(provider_env_var("nvidia-nim"), "NVIDIA_API_KEY"); // alias
         assert_eq!(provider_env_var("build.nvidia.com"), "NVIDIA_API_KEY"); // alias
         assert_eq!(provider_env_var("astrai"), "ASTRAI_API_KEY");
+        assert_eq!(provider_env_var("opencode-go"), "OPENCODE_GO_API_KEY");
     }
 
     #[test]
@@ -7166,6 +7381,7 @@ mod tests {
             allowed_users: vec!["*".into()],
             thread_replies: Some(true),
             mention_only: Some(false),
+            interrupt_on_new_message: false,
         });
         assert!(has_launchable_channels(&channels));
 

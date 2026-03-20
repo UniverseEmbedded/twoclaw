@@ -12,6 +12,11 @@ pub struct ChannelMessage {
     /// Platform thread identifier (e.g. Slack `ts`, Discord thread ID).
     /// When set, replies should be posted as threaded responses.
     pub thread_ts: Option<String>,
+    /// Thread scope identifier for interruption/cancellation grouping.
+    /// Distinct from `thread_ts` (reply anchor): this is `Some` only when the message
+    /// is genuinely inside a reply thread and should be isolated from other threads.
+    /// `None` means top-level — scope is sender+channel only.
+    pub interruption_scope_id: Option<String>,
 }
 
 /// Message to send through a channel
@@ -142,6 +147,16 @@ pub trait Channel: Send + Sync {
     ) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// Pin a message in the channel.
+    async fn pin_message(&self, _channel_id: &str, _message_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Unpin a previously pinned message.
+    async fn unpin_message(&self, _channel_id: &str, _message_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +187,7 @@ mod tests {
                 channel: "dummy".into(),
                 timestamp: 123,
                 thread_ts: None,
+                interruption_scope_id: None,
             })
             .await
             .map_err(|e| anyhow::anyhow!(e.to_string()))
@@ -188,6 +204,7 @@ mod tests {
             channel: "dummy".into(),
             timestamp: 999,
             thread_ts: None,
+            interruption_scope_id: None,
         };
 
         let cloned = message.clone();

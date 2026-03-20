@@ -1,9 +1,10 @@
 use crate::providers::traits::{
     ChatMessage, ChatRequest as ProviderChatRequest, ChatResponse as ProviderChatResponse,
-    Provider, TokenUsage, ToolCall as ProviderToolCall,
+    Provider, ProviderCapabilities, TokenUsage, ToolCall as ProviderToolCall,
 };
 use crate::tools::ToolSpec;
 use async_trait::async_trait;
+use base64::Engine as _;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +61,14 @@ struct NativeMessage {
 }
 
 #[derive(Debug, Serialize)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    source_type: String,
+    media_type: String,
+    data: String,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 enum NativeContentOut {
     #[serde(rename = "text")]
@@ -68,6 +77,8 @@ enum NativeContentOut {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -138,6 +149,10 @@ struct AnthropicUsage {
     input_tokens: Option<u64>,
     #[serde(default)]
     output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,9 +211,9 @@ impl AnthropicProvider {
         text.len() > 3072
     }
 
-    /// Cache conversations with more than 4 messages (excluding system)
+    /// Cache conversations with more than 1 non-system message (i.e. after first exchange)
     fn should_cache_conversation(messages: &[ChatMessage]) -> bool {
-        messages.iter().filter(|m| m.role != "system").count() > 4
+        messages.iter().filter(|m| m.role != "system").count() > 1
     }
 
     /// Apply cache control to the last message content block
@@ -210,7 +225,7 @@ impl AnthropicProvider {
                     | NativeContentOut::ToolResult { cache_control, .. } => {
                         *cache_control = Some(CacheControl::ephemeral());
                     }
-                    NativeContentOut::ToolUse { .. } => {}
+                    NativeContentOut::ToolUse { .. } | NativeContentOut::Image { .. } => {}
                 }
             }
         }
@@ -308,7 +323,7 @@ impl AnthropicProvider {
                             role: "assistant".to_string(),
                             content: blocks,
                         });
-                    } else {
+                    } else if !msg.content.trim().is_empty() {
                         native_messages.push(NativeMessage {
                             role: "assistant".to_string(),
                             content: vec![NativeContentOut::Text {
@@ -319,41 +334,126 @@ impl AnthropicProvider {
                     }
                 }
                 "tool" => {
-                    if let Some(tool_result) = Self::parse_tool_result_message(&msg.content) {
-                        native_messages.push(tool_result);
-                    } else {
-                        native_messages.push(NativeMessage {
+                    let tool_msg = if let Some(tr) = Self::parse_tool_result_message(&msg.content) {
+                        tr
+                    } else if !msg.content.trim().is_empty() {
+                        NativeMessage {
                             role: "user".to_string(),
                             content: vec![NativeContentOut::Text {
                                 text: msg.content.clone(),
                                 cache_control: None,
                             }],
-                        });
+                        }
+                    } else {
+                        continue;
+                    };
+                    // Tool results map to role "user"; merge consecutive ones
+                    // into a single message so Anthropic doesn't reject the
+                    // request for having adjacent same-role messages.
+                    if native_messages
+                        .last()
+                        .is_some_and(|m| m.role == tool_msg.role)
+                    {
+                        native_messages
+                            .last_mut()
+                            .unwrap()
+                            .content
+                            .extend(tool_msg.content);
+                    } else {
+                        native_messages.push(tool_msg);
                     }
                 }
                 _ => {
-                    native_messages.push(NativeMessage {
-                        role: "user".to_string(),
-                        content: vec![NativeContentOut::Text {
-                            text: msg.content.clone(),
+                    // Parse image markers from user message content
+                    let (text, image_refs) = crate::multimodal::parse_image_markers(&msg.content);
+                    let mut content_blocks: Vec<NativeContentOut> = Vec::new();
+
+                    // Add image content blocks for each image reference
+                    for img_ref in &image_refs {
+                        let (media_type, data) = if img_ref.starts_with("data:") {
+                            // Data URI format: data:image/jpeg;base64,/9j/4AAQ...
+                            if let Some(comma) = img_ref.find(',') {
+                                let header = &img_ref[5..comma];
+                                let mime =
+                                    header.split(';').next().unwrap_or("image/jpeg").to_string();
+                                let b64 = img_ref[comma + 1..].trim().to_string();
+                                (mime, b64)
+                            } else {
+                                continue;
+                            }
+                        } else if std::path::Path::new(img_ref.trim()).exists() {
+                            // Local file path
+                            match std::fs::read(img_ref.trim()) {
+                                Ok(bytes) => {
+                                    let b64 =
+                                        base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                    let ext = std::path::Path::new(img_ref.trim())
+                                        .extension()
+                                        .and_then(|e| e.to_str())
+                                        .unwrap_or("jpg");
+                                    let mime = match ext {
+                                        "png" => "image/png",
+                                        "gif" => "image/gif",
+                                        "webp" => "image/webp",
+                                        _ => "image/jpeg",
+                                    }
+                                    .to_string();
+                                    (mime, b64)
+                                }
+                                Err(_) => continue,
+                            }
+                        } else {
+                            continue;
+                        };
+
+                        content_blocks.push(NativeContentOut::Image {
+                            source: ImageSource {
+                                source_type: "base64".to_string(),
+                                media_type,
+                                data,
+                            },
+                        });
+                    }
+
+                    // Add text content block (skip empty text when images are present)
+                    if text.is_empty() && !image_refs.is_empty() {
+                        content_blocks.push(NativeContentOut::Text {
+                            text: "[image]".to_string(),
                             cache_control: None,
-                        }],
-                    });
+                        });
+                    } else if !text.trim().is_empty() {
+                        content_blocks.push(NativeContentOut::Text {
+                            text,
+                            cache_control: None,
+                        });
+                    }
+
+                    // Merge into previous user message if present (e.g.
+                    // when a user message immediately follows tool results
+                    // which are also role "user" in Anthropic's format).
+                    if native_messages.last().is_some_and(|m| m.role == "user") {
+                        native_messages
+                            .last_mut()
+                            .unwrap()
+                            .content
+                            .extend(content_blocks);
+                    } else {
+                        native_messages.push(NativeMessage {
+                            role: "user".to_string(),
+                            content: content_blocks,
+                        });
+                    }
                 }
             }
         }
 
-        // Convert system text to SystemPrompt with cache control if large
+        // Always use Blocks format with cache_control for system prompts
         let system_prompt = system_text.map(|text| {
-            if Self::should_cache_system(&text) {
-                SystemPrompt::Blocks(vec![SystemBlock {
-                    block_type: "text".to_string(),
-                    text,
-                    cache_control: Some(CacheControl::ephemeral()),
-                }])
-            } else {
-                SystemPrompt::String(text)
-            }
+            SystemPrompt::Blocks(vec![SystemBlock {
+                block_type: "text".to_string(),
+                text,
+                cache_control: Some(CacheControl::ephemeral()),
+            }])
         });
 
         (system_prompt, native_messages)
@@ -375,6 +475,7 @@ impl AnthropicProvider {
         let usage = response.usage.map(|u| TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
+            cached_input_tokens: u.cache_read_input_tokens,
         });
 
         for block in response.content {
@@ -508,6 +609,14 @@ impl Provider for AnthropicProvider {
 
         let native_response: NativeChatResponse = response.json().await?;
         Ok(Self::parse_native_response(native_response))
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            native_tool_calling: true,
+            vision: true,
+            prompt_caching: true,
+        }
     }
 
     fn supports_native_tools(&self) -> bool {
@@ -950,12 +1059,8 @@ mod tests {
                 role: "user".to_string(),
                 content: "Hello".to_string(),
             },
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: "Hi".to_string(),
-            },
         ];
-        // Only 2 non-system messages
+        // Only 1 non-system message — should not cache
         assert!(!AnthropicProvider::should_cache_conversation(&messages));
     }
 
@@ -965,8 +1070,8 @@ mod tests {
             role: "system".to_string(),
             content: "System prompt".to_string(),
         }];
-        // Add 5 non-system messages
-        for i in 0..5 {
+        // Add 3 non-system messages
+        for i in 0..3 {
             messages.push(ChatMessage {
                 role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
                 content: format!("Message {i}"),
@@ -977,21 +1082,24 @@ mod tests {
 
     #[test]
     fn should_cache_conversation_boundary() {
-        let mut messages = vec![];
-        // Add exactly 4 non-system messages
-        for i in 0..4 {
-            messages.push(ChatMessage {
-                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
-                content: format!("Message {i}"),
-            });
-        }
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+        }];
+        // Exactly 1 non-system message — should not cache
         assert!(!AnthropicProvider::should_cache_conversation(&messages));
 
-        // Add one more to cross boundary
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: "One more".to_string(),
-        });
+        // Add one more to cross boundary (>1)
+        let messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "Hi".to_string(),
+            },
+        ];
         assert!(AnthropicProvider::should_cache_conversation(&messages));
     }
 
@@ -1104,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_messages_small_system_prompt() {
+    fn convert_messages_small_system_prompt_uses_blocks_with_cache() {
         let messages = vec![ChatMessage {
             role: "system".to_string(),
             content: "Short system prompt".to_string(),
@@ -1113,10 +1221,17 @@ mod tests {
         let (system_prompt, _) = AnthropicProvider::convert_messages(&messages);
 
         match system_prompt.unwrap() {
-            SystemPrompt::String(s) => {
-                assert_eq!(s, "Short system prompt");
+            SystemPrompt::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 1);
+                assert_eq!(blocks[0].text, "Short system prompt");
+                assert!(
+                    blocks[0].cache_control.is_some(),
+                    "Small system prompts should have cache_control"
+                );
             }
-            SystemPrompt::Blocks(_) => panic!("Expected String variant for small prompt"),
+            SystemPrompt::String(_) => {
+                panic!("Expected Blocks variant with cache_control for small prompt")
+            }
         }
     }
 
@@ -1141,12 +1256,16 @@ mod tests {
     }
 
     #[test]
-    fn backward_compatibility_native_chat_request() {
-        // Test that requests without cache_control serialize identically to old format
+    fn native_chat_request_with_blocks_system() {
+        // System prompts now always use Blocks format with cache_control
         let req = NativeChatRequest {
             model: "claude-3-opus".to_string(),
             max_tokens: 4096,
-            system: Some(SystemPrompt::String("System".to_string())),
+            system: Some(SystemPrompt::Blocks(vec![SystemBlock {
+                block_type: "text".to_string(),
+                text: "System".to_string(),
+                cache_control: Some(CacheControl::ephemeral()),
+            }])),
             messages: vec![NativeMessage {
                 role: "user".to_string(),
                 content: vec![NativeContentOut::Text {
@@ -1159,8 +1278,11 @@ mod tests {
         };
 
         let json = serde_json::to_string(&req).unwrap();
-        assert!(!json.contains("cache_control"));
-        assert!(json.contains(r#""system":"System""#));
+        assert!(json.contains("System"));
+        assert!(
+            json.contains(r#""cache_control":{"type":"ephemeral"}"#),
+            "System prompt should include cache_control"
+        );
     }
 
     #[tokio::test]
@@ -1352,5 +1474,234 @@ mod tests {
         let resp: NativeChatResponse = serde_json::from_str(json).unwrap();
         let result = AnthropicProvider::parse_native_response(resp);
         assert!(result.usage.is_none());
+    }
+
+    #[test]
+    fn capabilities_returns_vision_and_native_tools() {
+        let provider = AnthropicProvider::new(Some("test-key"));
+        let caps = provider.capabilities();
+        assert!(
+            caps.native_tool_calling,
+            "Anthropic should support native tool calling"
+        );
+        assert!(caps.vision, "Anthropic should support vision");
+    }
+
+    #[test]
+    fn convert_messages_with_image_marker_data_uri() {
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Check this image: [IMAGE:data:image/jpeg;base64,/9j/4AAQ] What do you see?"
+                .to_string(),
+        }];
+
+        let (_, native_msgs) = AnthropicProvider::convert_messages(&messages);
+
+        assert_eq!(native_msgs.len(), 1);
+        assert_eq!(native_msgs[0].role, "user");
+        // Should have 2 content blocks: image + text
+        assert_eq!(native_msgs[0].content.len(), 2);
+
+        // First block should be image
+        match &native_msgs[0].content[0] {
+            NativeContentOut::Image { source } => {
+                assert_eq!(source.source_type, "base64");
+                assert_eq!(source.media_type, "image/jpeg");
+                assert_eq!(source.data, "/9j/4AAQ");
+            }
+            _ => panic!("Expected Image content block"),
+        }
+
+        // Second block should be text (parse_image_markers may leave extra spaces)
+        match &native_msgs[0].content[1] {
+            NativeContentOut::Text { text, .. } => {
+                // The text may have extra spaces where the marker was removed
+                assert!(
+                    text.contains("Check this image:") && text.contains("What do you see?"),
+                    "Expected text to contain 'Check this image:' and 'What do you see?', got: {}",
+                    text
+                );
+            }
+            _ => panic!("Expected Text content block"),
+        }
+    }
+
+    #[test]
+    fn convert_messages_with_only_image_marker() {
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "[IMAGE:data:image/png;base64,iVBORw0KGgo]".to_string(),
+        }];
+
+        let (_, native_msgs) = AnthropicProvider::convert_messages(&messages);
+
+        assert_eq!(native_msgs.len(), 1);
+        assert_eq!(native_msgs[0].content.len(), 2);
+
+        // First block should be image
+        match &native_msgs[0].content[0] {
+            NativeContentOut::Image { source } => {
+                assert_eq!(source.media_type, "image/png");
+            }
+            _ => panic!("Expected Image content block"),
+        }
+
+        // Second block should be placeholder text
+        match &native_msgs[0].content[1] {
+            NativeContentOut::Text { text, .. } => {
+                assert_eq!(text, "[image]");
+            }
+            _ => panic!("Expected Text content block with [image] placeholder"),
+        }
+    }
+
+    #[test]
+    fn convert_messages_without_image_marker() {
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Hello, how are you?".to_string(),
+        }];
+
+        let (_, native_msgs) = AnthropicProvider::convert_messages(&messages);
+
+        assert_eq!(native_msgs.len(), 1);
+        assert_eq!(native_msgs[0].content.len(), 1);
+
+        match &native_msgs[0].content[0] {
+            NativeContentOut::Text { text, .. } => {
+                assert_eq!(text, "Hello, how are you?");
+            }
+            _ => panic!("Expected Text content block"),
+        }
+    }
+
+    #[test]
+    fn image_content_serializes_correctly() {
+        let content = NativeContentOut::Image {
+            source: ImageSource {
+                source_type: "base64".to_string(),
+                media_type: "image/jpeg".to_string(),
+                data: "testdata".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&content).unwrap();
+        // The outer "type" is the enum tag, inner "type" (source_type) is renamed
+        assert!(json.contains(r#""type":"image""#), "JSON: {}", json);
+        assert!(json.contains(r#""type":"base64""#), "JSON: {}", json); // source_type is serialized as "type"
+        assert!(
+            json.contains(r#""media_type":"image/jpeg""#),
+            "JSON: {}",
+            json
+        );
+        assert!(json.contains(r#""data":"testdata""#), "JSON: {}", json);
+    }
+
+    #[test]
+    fn convert_messages_merges_consecutive_tool_results() {
+        // Simulate a multi-tool-call turn: assistant with two tool_use blocks
+        // followed by two separate tool result messages.
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "You are helpful.".to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Do two things.".to_string(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!({
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_1", "name": "shell", "arguments": "{\"command\":\"ls\"}"},
+                        {"id": "call_2", "name": "shell", "arguments": "{\"command\":\"pwd\"}"}
+                    ]
+                })
+                .to_string(),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: serde_json::json!({
+                    "tool_call_id": "call_1",
+                    "content": "file1.txt\nfile2.txt"
+                })
+                .to_string(),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: serde_json::json!({
+                    "tool_call_id": "call_2",
+                    "content": "/home/user"
+                })
+                .to_string(),
+            },
+        ];
+
+        let (system, native_msgs) = AnthropicProvider::convert_messages(&messages);
+
+        assert!(system.is_some());
+        // Should be: user, assistant, user (merged tool results)
+        // NOT: user, assistant, user, user (which Anthropic rejects)
+        assert_eq!(
+            native_msgs.len(),
+            3,
+            "Expected 3 messages (user, assistant, merged tool results), got {}.\nRoles: {:?}",
+            native_msgs.len(),
+            native_msgs.iter().map(|m| &m.role).collect::<Vec<_>>()
+        );
+        assert_eq!(native_msgs[0].role, "user");
+        assert_eq!(native_msgs[1].role, "assistant");
+        assert_eq!(native_msgs[2].role, "user");
+        // The merged user message should contain both tool results
+        assert_eq!(
+            native_msgs[2].content.len(),
+            2,
+            "Expected 2 tool_result blocks in merged message"
+        );
+    }
+
+    #[test]
+    fn convert_messages_no_adjacent_same_role() {
+        // Verify that convert_messages never produces adjacent messages with the
+        // same role, regardless of input ordering.
+        let messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: serde_json::json!({
+                    "content": "I'll run a command",
+                    "tool_calls": [
+                        {"id": "tc1", "name": "shell", "arguments": "{\"command\":\"echo hi\"}"}
+                    ]
+                })
+                .to_string(),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: serde_json::json!({
+                    "tool_call_id": "tc1",
+                    "content": "hi"
+                })
+                .to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Thanks!".to_string(),
+            },
+        ];
+
+        let (_system, native_msgs) = AnthropicProvider::convert_messages(&messages);
+
+        for window in native_msgs.windows(2) {
+            assert_ne!(
+                window[0].role, window[1].role,
+                "Adjacent messages must not share the same role: found two '{}' messages in a row",
+                window[0].role
+            );
+        }
     }
 }

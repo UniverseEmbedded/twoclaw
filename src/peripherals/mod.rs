@@ -24,6 +24,7 @@ pub mod uno_q_setup;
 #[cfg(all(feature = "peripheral-rpi", target_os = "linux"))]
 pub mod rpi;
 
+#[cfg(any(feature = "hardware", feature = "peripheral-rpi"))]
 pub use traits::Peripheral;
 
 use crate::config::{Config, PeripheralBoardConfig, PeripheralsConfig};
@@ -76,7 +77,7 @@ pub async fn handle_command(cmd: crate::PeripheralCommands, config: &Config) -> 
                 Some(path.clone())
             };
 
-            let mut cfg = crate::config::Config::load_or_init().await?;
+            let mut cfg = Box::pin(crate::config::Config::load_or_init()).await?;
             cfg.peripherals.enabled = true;
 
             if cfg
@@ -228,6 +229,7 @@ pub async fn create_peripheral_tools(config: &PeripheralsConfig) -> Result<Vec<B
 }
 
 #[cfg(not(feature = "hardware"))]
+#[allow(clippy::unused_async)]
 pub async fn create_peripheral_tools(_config: &PeripheralsConfig) -> Result<Vec<Box<dyn Tool>>> {
     Ok(Vec::new())
 }

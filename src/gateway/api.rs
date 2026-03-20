@@ -60,6 +60,11 @@ pub struct MemoryStoreBody {
 }
 
 #[derive(Deserialize)]
+pub struct CronRunsQuery {
+    pub limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
 pub struct CronAddBody {
     pub name: Option<String>,
     pub schedule: String,
@@ -257,7 +262,13 @@ pub async fn handle_api_cron_add(
         tz: None,
     };
 
-    match crate::cron::add_shell_job(&config, body.name, schedule, &body.command) {
+    match crate::cron::add_shell_job_with_approval(
+        &config,
+        body.name,
+        schedule,
+        &body.command,
+        false,
+    ) {
         Ok(job) => Json(serde_json::json!({
             "status": "ok",
             "job": {
@@ -271,6 +282,55 @@ pub async fn handle_api_cron_add(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to add cron job: {e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/cron/:id/runs — list recent runs for a cron job
+pub async fn handle_api_cron_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(params): Query<CronRunsQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 100) as usize;
+    let config = state.config.lock().clone();
+
+    // Verify the job exists before listing runs.
+    if let Err(e) = crate::cron::get_job(&config, &id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Cron job not found: {e}")})),
+        )
+            .into_response();
+    }
+
+    match crate::cron::list_runs(&config, &id, limit) {
+        Ok(runs) => {
+            let runs_json: Vec<serde_json::Value> = runs
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "job_id": r.job_id,
+                        "started_at": r.started_at.to_rfc3339(),
+                        "finished_at": r.finished_at.to_rfc3339(),
+                        "status": r.status,
+                        "output": r.output,
+                        "duration_ms": r.duration_ms,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({"runs": runs_json})).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to list cron runs: {e}")})),
         )
             .into_response(),
     }
@@ -295,6 +355,65 @@ pub async fn handle_api_cron_delete(
         )
             .into_response(),
     }
+}
+
+/// GET /api/cron/settings — return cron subsystem settings
+pub async fn handle_api_cron_settings_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    Json(serde_json::json!({
+        "enabled": config.cron.enabled,
+        "catch_up_on_startup": config.cron.catch_up_on_startup,
+        "max_run_history": config.cron.max_run_history,
+    }))
+    .into_response()
+}
+
+/// PATCH /api/cron/settings — update cron subsystem settings
+pub async fn handle_api_cron_settings_patch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let mut config = state.config.lock().clone();
+
+    if let Some(v) = body.get("enabled").and_then(|v| v.as_bool()) {
+        config.cron.enabled = v;
+    }
+    if let Some(v) = body.get("catch_up_on_startup").and_then(|v| v.as_bool()) {
+        config.cron.catch_up_on_startup = v;
+    }
+    if let Some(v) = body.get("max_run_history").and_then(|v| v.as_u64()) {
+        config.cron.max_run_history = u32::try_from(v).unwrap_or(u32::MAX);
+    }
+
+    if let Err(e) = config.save().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to save config: {e}")})),
+        )
+            .into_response();
+    }
+
+    *state.config.lock() = config.clone();
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "enabled": config.cron.enabled,
+        "catch_up_on_startup": config.cron.catch_up_on_startup,
+        "max_run_history": config.cron.max_run_history,
+    }))
+    .into_response()
 }
 
 /// GET /api/integrations — list all integrations with status
@@ -323,6 +442,35 @@ pub async fn handle_api_integrations(
         .collect();
 
     Json(serde_json::json!({"integrations": integrations})).into_response()
+}
+
+/// GET /api/integrations/settings — return per-integration settings (enabled + category)
+pub async fn handle_api_integrations_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let config = state.config.lock().clone();
+    let entries = crate::integrations::registry::all_integrations();
+
+    let mut settings = serde_json::Map::new();
+    for entry in &entries {
+        let status = (entry.status_fn)(&config);
+        let enabled = matches!(status, crate::integrations::IntegrationStatus::Active);
+        settings.insert(
+            entry.name.to_string(),
+            serde_json::json!({
+                "enabled": enabled,
+                "category": entry.category,
+                "status": status,
+            }),
+        );
+    }
+
+    Json(serde_json::json!({"settings": settings})).into_response()
 }
 
 /// POST /api/doctor — run diagnostics
@@ -776,6 +924,7 @@ fn mask_sensitive_fields(config: &crate::config::Config) -> crate::config::Confi
     if let Some(qq) = masked.channels_config.qq.as_mut() {
         mask_required_secret(&mut qq.app_secret);
     }
+    #[cfg(feature = "channel-nostr")]
     if let Some(nostr) = masked.channels_config.nostr.as_mut() {
         mask_required_secret(&mut nostr.private_key);
     }
@@ -953,6 +1102,7 @@ fn restore_masked_sensitive_fields(
     ) {
         restore_required_secret(&mut incoming_ch.app_secret, &current_ch.app_secret);
     }
+    #[cfg(feature = "channel-nostr")]
     if let (Some(incoming_ch), Some(current_ch)) = (
         incoming.channels_config.nostr.as_mut(),
         current.channels_config.nostr.as_ref(),
@@ -983,6 +1133,76 @@ fn hydrate_config_for_save(
     incoming.config_path = current.config_path.clone();
     incoming.workspace_dir = current.workspace_dir.clone();
     incoming
+}
+
+// ── Session API handlers ─────────────────────────────────────────
+
+/// GET /api/sessions — list gateway sessions
+pub async fn handle_api_sessions_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return Json(serde_json::json!({
+            "sessions": [],
+            "message": "Session persistence is disabled"
+        }))
+        .into_response();
+    };
+
+    let all_metadata = backend.list_sessions_with_metadata();
+    let gw_sessions: Vec<serde_json::Value> = all_metadata
+        .into_iter()
+        .filter_map(|meta| {
+            let session_id = meta.key.strip_prefix("gw_")?;
+            Some(serde_json::json!({
+                "session_id": session_id,
+                "created_at": meta.created_at.to_rfc3339(),
+                "last_activity": meta.last_activity.to_rfc3339(),
+                "message_count": meta.message_count,
+            }))
+        })
+        .collect();
+
+    Json(serde_json::json!({ "sessions": gw_sessions })).into_response()
+}
+
+/// DELETE /api/sessions/{id} — delete a gateway session
+pub async fn handle_api_session_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let Some(ref backend) = state.session_backend else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session persistence is disabled"})),
+        )
+            .into_response();
+    };
+
+    let session_key = format!("gw_{id}");
+    match backend.delete_session(&session_key) {
+        Ok(true) => Json(serde_json::json!({"deleted": true, "session_id": id})).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to delete session: {e}")})),
+        )
+            .into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -1026,6 +1246,7 @@ mod tests {
             from_address: "agent@example.com".to_string(),
             idle_timeout_secs: 1740,
             allowed_senders: vec!["*".to_string()],
+            default_subject: "ZeroClaw Message".to_string(),
         });
         cfg.model_routes = vec![crate::config::schema::ModelRouteConfig {
             hint: "reasoning".to_string(),
@@ -1159,6 +1380,7 @@ mod tests {
             from_address: "agent@example.com".to_string(),
             idle_timeout_secs: 1740,
             allowed_senders: vec!["*".to_string()],
+            default_subject: "ZeroClaw Message".to_string(),
         });
         current.model_routes = vec![
             crate::config::schema::ModelRouteConfig {

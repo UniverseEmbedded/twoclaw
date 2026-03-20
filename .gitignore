@@ -1,5 +1,8 @@
 /target
+/target-*/
 firmware/*/target
+web/dist/*
+!web/dist/.gitkeep
 *.db
 *.db-journal
 .DS_Store
@@ -29,6 +32,22 @@ venv/
 *.pem
 credentials.json
 .worktrees/
+.zeroclaw/*
 
-/.idea/
+# Skill eval workspaces (test outputs, transcripts, grading)
+.claude/skills/*-workspace/
+
+# Local state backups
+.local-state-backups/
+*.local-state-backup/
+
+# Coverage artifacts
+lcov.info
+
+# IDE's stuff
+.idea
+
+# Wrangler cache
+.wrangler/
+
 /dev/onebot-local/

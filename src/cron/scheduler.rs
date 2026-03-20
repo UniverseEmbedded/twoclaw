@@ -1,10 +1,14 @@
+#[cfg(feature = "channel-matrix")]
+use crate::channels::MatrixChannel;
 use crate::channels::{
-    Channel, DiscordChannel, MattermostChannel, SendMessage, SlackChannel, TelegramChannel,
+    Channel, DiscordChannel, MattermostChannel, SendMessage, SignalChannel, SlackChannel,
+    TelegramChannel,
 };
 use crate::config::Config;
 use crate::cron::{
-    due_jobs, next_run_for_schedule, record_last_run, record_run, remove_job, reschedule_after_run,
-    update_job, CronJob, CronJobPatch, DeliveryConfig, JobType, Schedule, SessionTarget,
+    all_overdue_jobs, due_jobs, next_run_for_schedule, record_last_run, record_run, remove_job,
+    reschedule_after_run, update_job, CronJob, CronJobPatch, DeliveryConfig, JobType, Schedule,
+    SessionTarget,
 };
 use crate::security::SecurityPolicy;
 use anyhow::Result;
@@ -30,6 +34,18 @@ pub async fn run(config: Config) -> Result<()> {
 
     crate::health::mark_component_ok(SCHEDULER_COMPONENT);
 
+    // ── Startup catch-up: run ALL overdue jobs before entering the
+    //    normal polling loop. The regular loop is capped by `max_tasks`,
+    //    which could leave some overdue jobs waiting across many cycles
+    //    if the machine was off for a while. The catch-up phase fetches
+    //    without the `max_tasks` limit so every missed job fires once.
+    //    Controlled by `[cron] catch_up_on_startup` (default: true).
+    if config.cron.catch_up_on_startup {
+        catch_up_overdue_jobs(&config, &security).await;
+    } else {
+        tracing::info!("Scheduler startup: catch-up disabled by config");
+    }
+
     loop {
         interval.tick().await;
         // Keep scheduler liveness fresh even when there are no due jobs.
@@ -48,9 +64,38 @@ pub async fn run(config: Config) -> Result<()> {
     }
 }
 
+/// Fetch **all** overdue jobs (ignoring `max_tasks`) and execute them.
+///
+/// Called once at scheduler startup so that jobs missed during downtime
+/// (e.g. late boot, daemon restart) are caught up immediately.
+async fn catch_up_overdue_jobs(config: &Config, security: &Arc<SecurityPolicy>) {
+    let now = Utc::now();
+    let jobs = match all_overdue_jobs(config, now) {
+        Ok(jobs) => jobs,
+        Err(e) => {
+            tracing::warn!("Startup catch-up query failed: {e}");
+            return;
+        }
+    };
+
+    if jobs.is_empty() {
+        tracing::info!("Scheduler startup: no overdue jobs to catch up");
+        return;
+    }
+
+    tracing::info!(
+        count = jobs.len(),
+        "Scheduler startup: catching up overdue jobs"
+    );
+
+    process_due_jobs(config, security, jobs, SCHEDULER_COMPONENT).await;
+
+    tracing::info!("Scheduler startup: catch-up complete");
+}
+
 pub async fn execute_job_now(config: &Config, job: &CronJob) -> (bool, String) {
     let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
-    execute_job_with_retry(config, &security, job).await
+    Box::pin(execute_job_with_retry(config, &security, job)).await
 }
 
 async fn execute_job_with_retry(
@@ -65,7 +110,7 @@ async fn execute_job_with_retry(
     for attempt in 0..=retries {
         let (success, output) = match job.job_type {
             JobType::Shell => run_job_command(config, security, job).await,
-            JobType::Agent => run_agent_job(config, security, job).await,
+            JobType::Agent => Box::pin(run_agent_job(config, security, job)).await,
         };
         last_output = output;
 
@@ -98,18 +143,21 @@ async fn process_due_jobs(
     crate::health::mark_component_ok(component);
 
     let max_concurrent = config.scheduler.max_concurrent.max(1);
-    let mut in_flight =
-        stream::iter(
-            jobs.into_iter().map(|job| {
-                let config = config.clone();
-                let security = Arc::clone(security);
-                let component = component.to_owned();
-                async move {
-                    execute_and_persist_job(&config, security.as_ref(), &job, &component).await
-                }
-            }),
-        )
-        .buffer_unordered(max_concurrent);
+    let mut in_flight = stream::iter(jobs.into_iter().map(|job| {
+        let config = config.clone();
+        let security = Arc::clone(security);
+        let component = component.to_owned();
+        async move {
+            Box::pin(execute_and_persist_job(
+                &config,
+                security.as_ref(),
+                &job,
+                &component,
+            ))
+            .await
+        }
+    }))
+    .buffer_unordered(max_concurrent);
 
     while let Some((job_id, success, output)) = in_flight.next().await {
         if !success {
@@ -128,9 +176,17 @@ async fn execute_and_persist_job(
     warn_if_high_frequency_agent_job(job);
 
     let started_at = Utc::now();
-    let (success, output) = execute_job_with_retry(config, security, job).await;
+    let (success, output) = Box::pin(execute_job_with_retry(config, security, job)).await;
     let finished_at = Utc::now();
-    let success = persist_job_result(config, job, success, &output, started_at, finished_at).await;
+    let success = Box::pin(persist_job_result(
+        config,
+        job,
+        success,
+        &output,
+        started_at,
+        finished_at,
+    ))
+    .await;
 
     (job.id.clone(), success, output)
 }
@@ -167,7 +223,7 @@ async fn run_agent_job(
 
     let run_result = match job.session_target {
         SessionTarget::Main | SessionTarget::Isolated => {
-            crate::agent::run(
+            Box::pin(crate::agent::run(
                 config.clone(),
                 Some(prefixed_prompt),
                 None,
@@ -175,7 +231,9 @@ async fn run_agent_job(
                 config.default_temperature,
                 vec![],
                 false,
-            )
+                None,
+                job.allowed_tools.clone(),
+            ))
             .await
         }
     };
@@ -226,6 +284,15 @@ async fn persist_job_result(
         if success {
             if let Err(e) = remove_job(config, &job.id) {
                 tracing::warn!("Failed to remove one-shot cron job after success: {e}");
+                // Fall back to disabling the job so it won't re-trigger.
+                let _ = update_job(
+                    config,
+                    &job.id,
+                    CronJobPatch {
+                        enabled: Some(false),
+                        ..CronJobPatch::default()
+                    },
+                );
             }
         } else {
             let _ = record_last_run(config, &job.id, finished_at, false, output);
@@ -278,6 +345,15 @@ fn warn_if_high_frequency_agent_job(job: &CronJob) {
             "Cron agent job '{}' is scheduled more frequently than every 5 minutes",
             job.id
         );
+    }
+}
+
+fn resolve_matrix_delivery_room(configured_room_id: &str, target: &str) -> String {
+    let target = target.trim();
+    if target.is_empty() {
+        configured_room_id.trim().to_string()
+    } else {
+        target.to_string()
     }
 }
 
@@ -342,9 +418,12 @@ pub(crate) async fn deliver_announcement(
                 .ok_or_else(|| anyhow::anyhow!("slack channel not configured"))?;
             let channel = SlackChannel::new(
                 sl.bot_token.clone(),
+                sl.app_token.clone(),
                 sl.channel_id.clone(),
+                Vec::new(),
                 sl.allowed_users.clone(),
-            );
+            )
+            .with_workspace_dir(config.workspace_dir.clone());
             channel.send(&SendMessage::new(output, target)).await?;
         }
         "mattermost" => {
@@ -362,6 +441,47 @@ pub(crate) async fn deliver_announcement(
                 mm.mention_only.unwrap_or(false),
             );
             channel.send(&SendMessage::new(output, target)).await?;
+        }
+        "signal" => {
+            let sg = config
+                .channels_config
+                .signal
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("signal channel not configured"))?;
+            let channel = SignalChannel::new(
+                sg.http_url.clone(),
+                sg.account.clone(),
+                sg.group_id.clone(),
+                sg.allowed_from.clone(),
+                sg.ignore_attachments,
+                sg.ignore_stories,
+            );
+            channel.send(&SendMessage::new(output, target)).await?;
+        }
+        "matrix" => {
+            #[cfg(feature = "channel-matrix")]
+            {
+                let mx = config
+                    .channels_config
+                    .matrix
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("matrix channel not configured"))?;
+                let room_id = resolve_matrix_delivery_room(&mx.room_id, target);
+                let channel = MatrixChannel::new_with_session_hint_and_zeroclaw_dir(
+                    mx.homeserver.clone(),
+                    mx.access_token.clone(),
+                    room_id,
+                    mx.allowed_users.clone(),
+                    mx.user_id.clone(),
+                    mx.device_id.clone(),
+                    config.config_path.parent().map(|path| path.to_path_buf()),
+                );
+                channel.send(&SendMessage::new(output, target)).await?;
+            }
+            #[cfg(not(feature = "channel-matrix"))]
+            {
+                anyhow::bail!("matrix delivery channel requires `channel-matrix` feature");
+            }
         }
         other => anyhow::bail!("unsupported delivery channel: {other}"),
     }
@@ -403,14 +523,15 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    if !security.is_command_allowed(&job.command) {
-        return (
-            false,
-            format!(
-                "blocked by security policy: command not allowed: {}",
-                job.command
-            ),
-        );
+    // Unified command validation: allowlist + risk + path checks in one call.
+    // Jobs created via the validated helpers were already checked at creation
+    // time, but we re-validate at execution time to catch policy changes and
+    // manually-edited job stores.
+    let approved = false; // scheduler runs are never pre-approved
+    if let Err(error) =
+        crate::cron::validate_shell_command_with_security(security, &job.command, approved)
+    {
+        return (false, error.to_string());
     }
 
     if let Some(path) = security.forbidden_path_argument(&job.command) {
@@ -427,26 +548,12 @@ async fn run_job_command_with_timeout(
         );
     }
 
-    let mut shell = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&job.command);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("-lc").arg(&job.command);
-        c
-    };
-
-    let child = match shell
-        .current_dir(&config.workspace_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => return (false, format!("spawn error: {e}")),
+    let child = match build_cron_shell_command(&job.command, &config.workspace_dir) {
+        Ok(mut cmd) => match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => return (false, format!("spawn error: {e}")),
+        },
+        Err(e) => return (false, format!("shell setup error: {e}")),
     };
 
     match time::timeout(timeout, child.wait_with_output()).await {
@@ -467,6 +574,35 @@ async fn run_job_command_with_timeout(
             format!("job timed out after {}s", timeout.as_secs_f64()),
         ),
     }
+}
+
+/// Build a shell `Command` for cron job execution.
+///
+/// Uses `sh -c <command>` (non-login shell). On Windows, ZeroClaw users
+/// typically have Git Bash installed which provides `sh` in PATH, and
+/// cron commands are written with Unix shell syntax. The previous `-lc`
+/// (login shell) flag was dropped: login shells load the full user
+/// profile on every invocation which is slow and may cause side effects.
+///
+/// The command is configured with:
+/// - `current_dir` set to the workspace
+/// - `stdin` piped to `/dev/null` (no interactive input)
+/// - `stdout` and `stderr` piped for capture
+/// - `kill_on_drop(true)` for safe timeout handling
+fn build_cron_shell_command(
+    command: &str,
+    workspace_dir: &std::path::Path,
+) -> anyhow::Result<Command> {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(command)
+        .current_dir(workspace_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    Ok(cmd)
 }
 
 #[cfg(test)]
@@ -507,6 +643,7 @@ mod tests {
             enabled: true,
             delivery: DeliveryConfig::default(),
             delete_after_run: false,
+            allowed_tools: None,
             created_at: Utc::now(),
             next_run: Utc::now(),
             last_run: None,
@@ -570,7 +707,7 @@ mod tests {
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
-        assert!(output.contains("command not allowed"));
+        assert!(output.to_lowercase().contains("not allowed"));
     }
 
     #[tokio::test]
@@ -644,7 +781,7 @@ mod tests {
         let (success, output) = run_job_command(&config, &security, &job).await;
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
-        assert!(output.contains("command not allowed"));
+        assert!(output.to_lowercase().contains("not allowed"));
     }
 
     #[tokio::test]
@@ -692,7 +829,7 @@ mod tests {
         .unwrap();
         let job = test_job("sh ./retry-once.sh");
 
-        let (success, output) = execute_job_with_retry(&config, &security, &job).await;
+        let (success, output) = Box::pin(execute_job_with_retry(&config, &security, &job)).await;
         assert!(success);
         assert!(output.contains("recovered"));
     }
@@ -707,7 +844,7 @@ mod tests {
 
         let job = test_job("ls always_missing_for_retry_test");
 
-        let (success, output) = execute_job_with_retry(&config, &security, &job).await;
+        let (success, output) = Box::pin(execute_job_with_retry(&config, &security, &job)).await;
         assert!(!success);
         assert!(output.contains("always_missing_for_retry_test"));
     }
@@ -721,7 +858,7 @@ mod tests {
         job.prompt = Some("Say hello".into());
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-        let (success, output) = run_agent_job(&config, &security, &job).await;
+        let (success, output) = Box::pin(run_agent_job(&config, &security, &job)).await;
         assert!(!success);
         assert!(output.contains("agent job failed:"));
     }
@@ -736,7 +873,7 @@ mod tests {
         job.prompt = Some("Say hello".into());
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-        let (success, output) = run_agent_job(&config, &security, &job).await;
+        let (success, output) = Box::pin(run_agent_job(&config, &security, &job)).await;
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
         assert!(output.contains("read-only"));
@@ -752,7 +889,7 @@ mod tests {
         job.prompt = Some("Say hello".into());
         let security = SecurityPolicy::from_config(&config.autonomy, &config.workspace_dir);
 
-        let (success, output) = run_agent_job(&config, &security, &job).await;
+        let (success, output) = Box::pin(run_agent_job(&config, &security, &job)).await;
         assert!(!success);
         assert!(output.contains("blocked by security policy"));
         assert!(output.contains("rate limit exceeded"));
@@ -828,6 +965,7 @@ mod tests {
             None,
             None,
             true,
+            None,
         )
         .unwrap();
         let started = Utc::now();
@@ -853,6 +991,7 @@ mod tests {
             None,
             None,
             true,
+            None,
         )
         .unwrap();
         let started = Utc::now();
@@ -919,6 +1058,7 @@ mod tests {
                 best_effort: false,
             }),
             false,
+            None,
         )
         .unwrap();
         let started = Utc::now();
@@ -957,6 +1097,7 @@ mod tests {
                 best_effort: true,
             }),
             false,
+            None,
         )
         .unwrap();
         let started = Utc::now();
@@ -975,7 +1116,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persist_job_result_at_schedule_without_delete_after_run_is_not_deleted() {
+    async fn persist_job_result_at_schedule_without_delete_after_run_is_disabled() {
         let tmp = TempDir::new().unwrap();
         let config = test_config(&tmp).await;
         let at = Utc::now() + ChronoDuration::minutes(10);
@@ -988,6 +1129,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .unwrap();
         assert!(!job.delete_after_run);
@@ -997,8 +1139,13 @@ mod tests {
         let success = persist_job_result(&config, &job, true, "ok", started, finished).await;
         assert!(success);
 
+        // After reschedule_after_run, At schedule jobs should be disabled
+        // to prevent re-execution with a past next_run timestamp.
         let updated = cron::get_job(&config, &job.id).unwrap();
-        assert!(updated.enabled);
+        assert!(
+            !updated.enabled,
+            "At schedule job should be disabled after execution via reschedule"
+        );
         assert_eq!(updated.last_status.as_deref(), Some("ok"));
     }
 
@@ -1018,5 +1165,107 @@ mod tests {
         };
         let err = deliver_if_configured(&config, &job, "x").await.unwrap_err();
         assert!(err.to_string().contains("unsupported delivery channel"));
+    }
+
+    #[test]
+    fn resolve_matrix_delivery_room_prefers_target_when_present() {
+        assert_eq!(
+            resolve_matrix_delivery_room("!default:matrix.org", "  !ops:matrix.org  "),
+            "!ops:matrix.org"
+        );
+    }
+
+    #[test]
+    fn resolve_matrix_delivery_room_falls_back_to_configured_room() {
+        assert_eq!(
+            resolve_matrix_delivery_room("  !default:matrix.org  ", "   "),
+            "!default:matrix.org"
+        );
+    }
+
+    #[cfg(feature = "channel-matrix")]
+    #[tokio::test]
+    async fn deliver_if_configured_matrix_missing_config() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp).await;
+        let mut job = test_job("echo ok");
+        job.delivery = DeliveryConfig {
+            mode: "announce".into(),
+            channel: Some("matrix".into()),
+            to: Some("!ops:matrix.org".into()),
+            best_effort: false,
+        };
+
+        let err = deliver_if_configured(&config, &job, "hello")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("matrix channel not configured"));
+    }
+
+    #[cfg(not(feature = "channel-matrix"))]
+    #[tokio::test]
+    async fn deliver_if_configured_matrix_feature_disabled() {
+        let tmp = TempDir::new().unwrap();
+        let config = test_config(&tmp).await;
+        let mut job = test_job("echo ok");
+        job.delivery = DeliveryConfig {
+            mode: "announce".into(),
+            channel: Some("matrix".into()),
+            to: Some("!ops:matrix.org".into()),
+            best_effort: false,
+        };
+
+        let err = deliver_if_configured(&config, &job, "hello")
+            .await
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("matrix delivery channel requires `channel-matrix` feature"));
+    }
+
+    #[test]
+    fn build_cron_shell_command_uses_sh_non_login() {
+        let workspace = std::env::temp_dir();
+        let cmd = build_cron_shell_command("echo cron-test", &workspace).unwrap();
+        let debug = format!("{cmd:?}");
+        assert!(debug.contains("echo cron-test"));
+        assert!(debug.contains("\"sh\""), "should use sh: {debug}");
+        // Must NOT use login shell (-l) — login shells load full profile
+        // and are slow/unpredictable for cron jobs.
+        assert!(
+            !debug.contains("\"-lc\""),
+            "must not use login shell: {debug}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_cron_shell_command_executes_successfully() {
+        let workspace = std::env::temp_dir();
+        let mut cmd = build_cron_shell_command("echo cron-ok", &workspace).unwrap();
+        let output = cmd.output().await.unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("cron-ok"));
+    }
+
+    #[tokio::test]
+    async fn catch_up_queries_all_overdue_jobs_ignoring_max_tasks() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp).await;
+        config.scheduler.max_tasks = 1; // limit normal polling to 1
+
+        // Create 3 jobs with "every minute" schedule
+        for i in 0..3 {
+            let _ = cron::add_job(&config, "* * * * *", &format!("echo catchup-{i}")).unwrap();
+        }
+
+        // Verify normal due_jobs is limited to max_tasks=1
+        let far_future = Utc::now() + ChronoDuration::days(1);
+        let due = cron::due_jobs(&config, far_future).unwrap();
+        assert_eq!(due.len(), 1, "due_jobs must respect max_tasks");
+
+        // all_overdue_jobs ignores the limit
+        let overdue = cron::all_overdue_jobs(&config, far_future).unwrap();
+        assert_eq!(overdue.len(), 3, "all_overdue_jobs must return all");
     }
 }

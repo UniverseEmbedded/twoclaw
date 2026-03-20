@@ -4,7 +4,7 @@
 
 use axum::{
     http::{header, StatusCode, Uri},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use rust_embed::Embed;
 
@@ -27,37 +27,29 @@ const FALLBACK_INDEX_HTML: &str = r#"<!doctype html>
 "#;
 
 /// Serve static files from `/_app/*` path
-pub async fn handle_static(uri: Uri) -> impl IntoResponse {
-    let path = uri.path().strip_prefix("/_app/").unwrap_or(uri.path());
+pub async fn handle_static(uri: Uri) -> Response {
+    let path = uri
+        .path()
+        .strip_prefix("/_app/")
+        .unwrap_or(uri.path())
+        .trim_start_matches('/');
 
     serve_embedded_file(path)
 }
 
 /// SPA fallback: serve index.html for any non-API, non-static GET request
-pub async fn handle_spa_fallback() -> impl IntoResponse {
-    match WebAssets::get("index.html") {
-        Some(content) => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
-            ],
-            content.data.to_vec(),
+pub async fn handle_spa_fallback() -> Response {
+    if WebAssets::get("index.html").is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Web dashboard not available. Build it with: cd web && npm ci && npm run build",
         )
-            .into_response(),
-        None => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
-            ],
-            FALLBACK_INDEX_HTML.as_bytes().to_vec(),
-        )
-            .into_response(),
+            .into_response();
     }
+    serve_embedded_file("index.html")
 }
 
-fn serve_embedded_file(path: &str) -> impl IntoResponse {
+fn serve_embedded_file(path: &str) -> Response {
     match WebAssets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path)

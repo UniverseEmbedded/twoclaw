@@ -4,7 +4,8 @@
 
 最后对齐：**2026-02-18**。
 
-其他语言：[English](README.en.md)
+Localized hubs:
+[العربية](README.ar.md) · [বাংলা](README.bn.md) · [Čeština](README.cs.md) · [Dansk](README.da.md) · [Deutsch](README.de.md) · [Ελληνικά](README.el.md) · [Español](README.es.md) · [Suomi](README.fi.md) · [Français](README.fr.md) · [עברית](README.he.md) · [हिन्दी](README.hi.md) · [Magyar](README.hu.md) · [Bahasa Indonesia](README.id.md) · [Italiano](README.it.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Norsk Bokmål](README.nb.md) · [Nederlands](README.nl.md) · [Polski](README.pl.md) · [Português](README.pt.md) · [Română](README.ro.md) · [Русский](README.ru.md) · [Svenska](README.sv.md) · [ไทย](README.th.md) · [Tagalog](README.tl.md) · [Türkçe](README.tr.md) · [Українська](README.uk.md) · [اردو](README.ur.md) · [Tiếng Việt](README.vi.md) · [简体中文](README.zh-CN.md).
 
 > 说明：命令、配置键、API 路径保持英文；实现细节以英文文档为准。
 
@@ -12,79 +13,81 @@
 
 | 我想要… | 建议阅读 |
 |---|---|
-| 快速安装并运行 | [../README.zh-CN.md](../README.zh-CN.md) / [../README.md](../README.md) |
-| 一键安装与初始化 | [one-click-bootstrap.md](one-click-bootstrap.md) |
-| 按任务找命令 | [commands-reference.md](commands-reference.md) |
-| 快速查看配置默认值与关键项 | [config-reference.md](config-reference.md) |
-| 接入自定义 Provider / endpoint | [custom-providers.md](custom-providers.md) |
-| 配置 Z.AI / GLM Provider | [zai-glm-setup.md](zai-glm-setup.md) |
-| 使用 LangGraph 工具调用集成 | [langgraph-integration.md](langgraph-integration.md) |
-| 进行日常运维（runbook） | [operations-runbook.md](operations-runbook.md) |
-| 快速排查安装/运行问题 | [troubleshooting.md](troubleshooting.md) |
-| 统一目录导航 | [SUMMARY.md](SUMMARY.md) |
-| 查看 PR/Issue 扫描快照 | [project-triage-snapshot-2026-02-18.md](project-triage-snapshot-2026-02-18.md) |
+| Install and run ZeroClaw quickly | [README.md (Quick Start)](../README.md#quick-start) |
+| Bootstrap in one command | [one-click-bootstrap.md](setup-guides/one-click-bootstrap.md) |
+| Update or uninstall on macOS | [macos-update-uninstall.md](setup-guides/macos-update-uninstall.md) |
+| Find commands by task | [commands-reference.md](reference/cli/commands-reference.md) |
+| Check config defaults and keys quickly | [config-reference.md](reference/api/config-reference.md) |
+| Configure custom providers/endpoints | [custom-providers.md](contributing/custom-providers.md) |
+| Configure Z.AI / GLM provider | [zai-glm-setup.md](setup-guides/zai-glm-setup.md) |
+| Use LangGraph integration patterns | [langgraph-integration.md](contributing/langgraph-integration.md) |
+| Operate runtime (day-2 runbook) | [operations-runbook.md](ops/operations-runbook.md) |
+| Troubleshoot install/runtime/channel issues | [troubleshooting.md](ops/troubleshooting.md) |
+| Run Matrix encrypted-room setup and diagnostics | [matrix-e2ee-guide.md](security/matrix-e2ee-guide.md) |
+| Browse docs by category | [SUMMARY.md](SUMMARY.md) |
+| See project PR/issue docs snapshot | [project-triage-snapshot-2026-02-18.md](maintainers/project-triage-snapshot-2026-02-18.md) |
 
 ## 10 秒决策树（先看这个）
 
-- 首次安装或快速启动 → [getting-started/README.md](getting-started/README.md)
-- 需要精确命令或配置键 → [reference/README.md](reference/README.md)
-- 需要部署与服务化运维 → [operations/README.md](operations/README.md)
-- 遇到报错、异常或回归 → [troubleshooting.md](troubleshooting.md)
-- 查看安全现状与路线图 → [security/README.md](security/README.md)
-- 接入板卡与外设 → [hardware/README.md](hardware/README.md)
-- 参与贡献、评审与 CI → [contributing/README.md](contributing/README.md)
-- 查看完整文档地图 → [SUMMARY.md](SUMMARY.md)
+- Need first-time setup or install? → [setup-guides/README.md](setup-guides/README.md)
+- Need exact CLI/config keys? → [reference/README.md](reference/README.md)
+- Need production/service operations? → [ops/README.md](ops/README.md)
+- Seeing failures or regressions? → [troubleshooting.md](ops/troubleshooting.md)
+- Working on security hardening or roadmap? → [security/README.md](security/README.md)
+- Working with boards/peripherals? → [hardware/README.md](hardware/README.md)
+- Contributing/reviewing/CI workflow? → [contributing/README.md](contributing/README.md)
+- Want the full map? → [SUMMARY.md](SUMMARY.md)
 
 ## 按目录浏览（推荐）
 
-- 入门文档： [getting-started/README.md](getting-started/README.md)
-- 参考手册： [reference/README.md](reference/README.md)
-- 运维与部署： [operations/README.md](operations/README.md)
-- 安全文档： [security/README.md](security/README.md)
-- 硬件与外设： [hardware/README.md](hardware/README.md)
-- 贡献与 CI： [contributing/README.md](contributing/README.md)
-- 项目快照： [project/README.md](project/README.md)
+- Getting started: [setup-guides/README.md](setup-guides/README.md)
+- Reference catalogs: [reference/README.md](reference/README.md)
+- Operations & deployment: [ops/README.md](ops/README.md)
+- Security docs: [security/README.md](security/README.md)
+- Hardware/peripherals: [hardware/README.md](hardware/README.md)
+- Contributing/CI: [contributing/README.md](contributing/README.md)
+- Project snapshots: [maintainers/README.md](maintainers/README.md)
 
 ## 按角色
 
 ### 用户 / 运维
 
-- [commands-reference.md](commands-reference.md)
-- [providers-reference.md](providers-reference.md)
-- [channels-reference.md](channels-reference.md)
-- [config-reference.md](config-reference.md)
-- [custom-providers.md](custom-providers.md)
-- [zai-glm-setup.md](zai-glm-setup.md)
-- [langgraph-integration.md](langgraph-integration.md)
-- [operations-runbook.md](operations-runbook.md)
-- [troubleshooting.md](troubleshooting.md)
+- [commands-reference.md](reference/cli/commands-reference.md) — command lookup by workflow
+- [providers-reference.md](reference/api/providers-reference.md) — provider IDs, aliases, credential env vars
+- [channels-reference.md](reference/api/channels-reference.md) — channel capabilities and setup paths
+- [matrix-e2ee-guide.md](security/matrix-e2ee-guide.md) — Matrix encrypted-room (E2EE) setup and no-response diagnostics
+- [config-reference.md](reference/api/config-reference.md) — high-signal config keys and secure defaults
+- [custom-providers.md](contributing/custom-providers.md) — custom provider/base URL integration templates
+- [zai-glm-setup.md](setup-guides/zai-glm-setup.md) — Z.AI/GLM setup and endpoint matrix
+- [langgraph-integration.md](contributing/langgraph-integration.md) — fallback integration for model/tool-calling edge cases
+- [operations-runbook.md](ops/operations-runbook.md) — day-2 runtime operations and rollback flow
+- [troubleshooting.md](ops/troubleshooting.md) — common failure signatures and recovery steps
 
 ### 贡献者 / 维护者
 
 - [../CONTRIBUTING.md](../CONTRIBUTING.md)
-- [pr-workflow.md](pr-workflow.md)
-- [reviewer-playbook.md](reviewer-playbook.md)
-- [ci-map.md](ci-map.md)
-- [actions-source-policy.md](actions-source-policy.md)
+- [pr-workflow.md](contributing/pr-workflow.md)
+- [reviewer-playbook.md](contributing/reviewer-playbook.md)
+- [ci-map.md](contributing/ci-map.md)
+- [actions-source-policy.md](contributing/actions-source-policy.md)
 
 ### 安全 / 稳定性
 
-> 说明：本分组内有 proposal/roadmap 文档，可能包含设想中的命令或配置。当前可执行行为请优先阅读 [config-reference.md](config-reference.md)、[operations-runbook.md](operations-runbook.md)、[troubleshooting.md](troubleshooting.md)。
+> Note: this area includes proposal/roadmap docs. For current behavior, start with [config-reference.md](reference/api/config-reference.md), [operations-runbook.md](ops/operations-runbook.md), and [troubleshooting.md](ops/troubleshooting.md).
 
 - [security/README.md](security/README.md)
-- [agnostic-security.md](agnostic-security.md)
-- [frictionless-security.md](frictionless-security.md)
-- [sandboxing.md](sandboxing.md)
-- [resource-limits.md](resource-limits.md)
-- [audit-logging.md](audit-logging.md)
-- [security-roadmap.md](security-roadmap.md)
+- [agnostic-security.md](security/agnostic-security.md)
+- [frictionless-security.md](security/frictionless-security.md)
+- [sandboxing.md](security/sandboxing.md)
+- [audit-logging.md](security/audit-logging.md)
+- [resource-limits.md](ops/resource-limits.md)
+- [security-roadmap.md](security/security-roadmap.md)
 
 ## 文档治理与分类
 
-- 统一目录（TOC）：[SUMMARY.md](SUMMARY.md)
-- 文档结构图（按语言/分区/功能）：[structure/README.md](structure/README.md)
-- 文档清单与分类：[docs-inventory.md](docs-inventory.md)
-
-## 其他语言
-
-- English: [README.en.md](README.en.md)
+- Unified TOC: [SUMMARY.md](SUMMARY.md)
+- Docs structure map (language/part/function): [structure/README.md](maintainers/structure-README.md)
+- Documentation inventory/classification: [docs-inventory.md](maintainers/docs-inventory.md)
+- i18n docs index: [i18n/README.md](i18n/README.md)
+- i18n coverage map: [i18n-coverage.md](maintainers/i18n-coverage.md)
+- Project triage snapshot: [project-triage-snapshot-2026-02-18.md](maintainers/project-triage-snapshot-2026-02-18.md)
