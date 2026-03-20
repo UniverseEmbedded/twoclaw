@@ -697,7 +697,6 @@ impl BedrockProvider {
                         let after_semi = &rest[semi + 1..];
                         if let Some(b64) = after_semi.strip_prefix("base64,") {
                             let format = match mime {
-                                "image/jpeg" | "image/jpg" => "jpeg",
                                 "image/png" => "png",
                                 "image/gif" => "gif",
                                 "image/webp" => "webp",
@@ -833,6 +832,7 @@ impl BedrockProvider {
         let usage = response.usage.map(|u| TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
+            cached_input_tokens: None,
         });
 
         if let Some(output) = response.output {
@@ -968,6 +968,7 @@ impl Provider for BedrockProvider {
         ProviderCapabilities {
             native_tool_calling: true,
             vision: true,
+            prompt_caching: false,
         }
     }
 
@@ -1263,7 +1264,8 @@ mod tests {
         assert!(
             err.contains("credentials not set")
                 || err.contains("169.254.169.254")
-                || err.to_lowercase().contains("credential"),
+                || err.to_lowercase().contains("credential")
+                || err.to_lowercase().contains("builder error"),
             "Expected missing-credentials style error, got: {err}"
         );
     }

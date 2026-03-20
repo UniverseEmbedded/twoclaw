@@ -1,8 +1,10 @@
 pub mod backend;
 pub mod chunker;
 pub mod cli;
+pub mod consolidation;
 pub mod embeddings;
 pub mod hygiene;
+pub mod knowledge_graph;
 pub mod lucid;
 pub mod markdown;
 pub mod none;
@@ -89,6 +91,21 @@ pub fn is_assistant_autosave_key(key: &str) -> bool {
     normalized == "assistant_resp" || normalized.starts_with("assistant_resp_")
 }
 
+/// Filter known synthetic autosave noise patterns that should not be
+/// persisted as user conversation memories.
+pub fn should_skip_autosave_content(content: &str) -> bool {
+    let normalized = content.trim();
+    if normalized.is_empty() {
+        return true;
+    }
+
+    let lowered = normalized.to_ascii_lowercase();
+    lowered.starts_with("[cron:")
+        || lowered.starts_with("[heartbeat task")
+        || lowered.starts_with("[distilled_")
+        || lowered.contains("distilled_index_sig:")
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct ResolvedEmbeddingConfig {
     provider: String,
@@ -107,15 +124,36 @@ impl std::fmt::Debug for ResolvedEmbeddingConfig {
     }
 }
 
+/// Look up the provider-specific environment variable for common embedding providers,
+/// so that `OPENAI_API_KEY` (etc.) takes precedence over the default-provider key
+/// that the caller passes in. Returns `None` for unknown providers.
+fn embedding_provider_env_key(provider: &str) -> Option<String> {
+    let env_var = match provider.trim() {
+        "openai" => "OPENAI_API_KEY",
+        "openrouter" => "OPENROUTER_API_KEY",
+        "cohere" => "COHERE_API_KEY",
+        _ => return None,
+    };
+    std::env::var(env_var)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 fn resolve_embedding_config(
     config: &MemoryConfig,
     embedding_routes: &[EmbeddingRouteConfig],
     api_key: Option<&str>,
 ) -> ResolvedEmbeddingConfig {
-    let fallback_api_key = api_key
+    let caller_api_key = api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    // Prefer a provider-specific env var over the caller-supplied key, which
+    // may come from the default (chat) provider and differ from the embedding
+    // provider (issue #3083: gemini key leaking to openai embeddings endpoint).
+    let fallback_api_key =
+        embedding_provider_env_key(config.embedding_provider.trim()).or(caller_api_key);
     let fallback = ResolvedEmbeddingConfig {
         provider: config.embedding_provider.trim().to_string(),
         model: config.embedding_model.trim().to_string(),
@@ -429,6 +467,23 @@ mod tests {
     }
 
     #[test]
+    fn autosave_content_filter_drops_cron_and_distilled_noise() {
+        assert!(should_skip_autosave_content("[cron:auto] patrol check"));
+        assert!(should_skip_autosave_content(
+            "[DISTILLED_MEMORY_CHUNK 1/2] DISTILLED_INDEX_SIG:abc123"
+        ));
+        assert!(should_skip_autosave_content(
+            "[Heartbeat Task | decision] Should I run tasks?"
+        ));
+        assert!(should_skip_autosave_content(
+            "[Heartbeat Task | high] Execute scheduled patrol"
+        ));
+        assert!(!should_skip_autosave_content(
+            "User prefers concise answers."
+        ));
+    }
+
+    #[test]
     fn factory_markdown() {
         let tmp = TempDir::new().unwrap();
         let cfg = MemoryConfig {
@@ -620,6 +675,47 @@ mod tests {
                 dimensions: 1536,
                 api_key: Some("base-key".into()),
             }
+        );
+    }
+
+    // Regression guard for issue #3083: when default_provider is "gemini"
+    // (api_key = gemini key) but embedding_provider is "cohere", the
+    // embedding provider's own env var (COHERE_API_KEY) must take precedence
+    // over the caller-supplied key (which belongs to the default provider).
+    //
+    // Uses COHERE_API_KEY to avoid accidental collision with OPENAI_API_KEY
+    // that may be set in the developer environment.
+    #[test]
+    fn resolve_embedding_config_uses_embedding_provider_env_key_not_default_provider_key() {
+        // COHERE_API_KEY is almost certainly unset in normal dev environments.
+        let prev = std::env::var("COHERE_API_KEY").ok();
+        std::env::set_var("COHERE_API_KEY", "cohere-from-env");
+
+        let cfg = MemoryConfig {
+            embedding_provider: "cohere".into(),
+            embedding_model: "embed-english-v3.0".into(),
+            embedding_dimensions: 1024,
+            ..MemoryConfig::default()
+        };
+
+        // Simulate: caller passes the Gemini (default_provider) api key.
+        let resolved = resolve_embedding_config(&cfg, &[], Some("gemini-key-must-not-be-used"));
+
+        // Restore env.
+        match prev {
+            Some(v) => std::env::set_var("COHERE_API_KEY", v),
+            None => std::env::remove_var("COHERE_API_KEY"),
+        }
+
+        assert_eq!(
+            resolved.api_key.as_deref(),
+            Some("cohere-from-env"),
+            "embedding api_key must come from COHERE_API_KEY env var, not from the default provider key"
+        );
+        assert_ne!(
+            resolved.api_key.as_deref(),
+            Some("gemini-key-must-not-be-used"),
+            "default_provider key must not leak to the embedding provider"
         );
     }
 }

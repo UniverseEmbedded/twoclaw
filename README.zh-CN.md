@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="zeroclaw.png" alt="ZeroClaw" width="200" />
+  <img src="https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/docs/assets/zeroclaw-banner.png" alt="ZeroClaw" width="600" />
 </p>
 
 <h1 align="center">ZeroClaw 🦀（简体中文）</h1>
@@ -13,39 +13,81 @@
   <a href="NOTICE"><img src="https://img.shields.io/badge/contributors-27+-green.svg" alt="Contributors" /></a>
   <a href="https://buymeacoffee.com/argenistherose"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-yellow.svg?style=flat&logo=buy-me-a-coffee" alt="Buy Me a Coffee" /></a>
   <a href="https://x.com/zeroclawlabs?s=21"><img src="https://img.shields.io/badge/X-%40zeroclawlabs-000000?style=flat&logo=x&logoColor=white" alt="X: @zeroclawlabs" /></a>
-  <a href="https://zeroclawlabs.cn/group.jpg"><img src="https://img.shields.io/badge/WeChat-Group-B7D7A8?logo=wechat&logoColor=white" alt="WeChat Group" /></a>
-  <a href="https://www.xiaohongshu.com/user/profile/67cbfc43000000000d008307?xsec_token=AB73VnYnGNx5y36EtnnZfGmAmS-6Wzv8WMuGpfwfkg6Yc%3D&xsec_source=pc_search"><img src="https://img.shields.io/badge/Xiaohongshu-Official-FF2442?style=flat" alt="Xiaohongshu: Official" /></a>
-  <a href="https://t.me/zeroclawlabs"><img src="https://img.shields.io/badge/Telegram-%40zeroclawlabs-26A5E4?style=flat&logo=telegram&logoColor=white" alt="Telegram: @zeroclawlabs" /></a>
-  <a href="https://www.facebook.com/groups/zeroclaw"><img src="https://img.shields.io/badge/Facebook-Group-1877F2?style=flat&logo=facebook&logoColor=white" alt="Facebook Group" /></a>
+  <a href="https://www.facebook.com/groups/zeroclawlabs"><img src="https://img.shields.io/badge/Facebook-Group-1877F2?style=flat&logo=facebook&logoColor=white" alt="Facebook Group" /></a>
+  <a href="https://discord.com/invite/wDshRVqRjx"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://www.instagram.com/therealzeroclaw"><img src="https://img.shields.io/badge/Instagram-%40therealzeroclaw-E4405F?style=flat&logo=instagram&logoColor=white" alt="Instagram: @therealzeroclaw" /></a>
+  <a href="https://www.tiktok.com/@zeroclawlabs"><img src="https://img.shields.io/badge/TikTok-%40zeroclawlabs-000000?style=flat&logo=tiktok&logoColor=white" alt="TikTok: @zeroclawlabs" /></a>
+  <a href="https://www.rednote.com/user/profile/69b735e6000000002603927e"><img src="https://img.shields.io/badge/RedNote-Official-FF2442?style=flat" alt="RedNote" /></a>
   <a href="https://www.reddit.com/r/zeroclawlabs/"><img src="https://img.shields.io/badge/Reddit-r%2Fzeroclawlabs-FF4500?style=flat&logo=reddit&logoColor=white" alt="Reddit: r/zeroclawlabs" /></a>
 </p>
 
 <p align="center">
-  🌐 语言：<a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ru.md">Русский</a> · <a href="README.fr.md">Français</a> · <a href="README.vi.md">Tiếng Việt</a>
+  🌐 语言：
+  <a href="README.md">🇺🇸 English</a> ·
+  <a href="README.zh-CN.md">🇨🇳 简体中文</a> ·
+  <a href="README.ja.md">🇯🇵 日本語</a> ·
+  <a href="README.ko.md">🇰🇷 한국어</a> ·
+  <a href="README.vi.md">🇻🇳 Tiếng Việt</a> ·
+  <a href="README.tl.md">🇵🇭 Tagalog</a> ·
+  <a href="README.es.md">🇪🇸 Español</a> ·
+  <a href="README.pt.md">🇧🇷 Português</a> ·
+  <a href="README.it.md">🇮🇹 Italiano</a> ·
+  <a href="README.de.md">🇩🇪 Deutsch</a> ·
+  <a href="README.fr.md">🇫🇷 Français</a> ·
+  <a href="README.ar.md">🇸🇦 العربية</a> ·
+  <a href="README.hi.md">🇮🇳 हिन्दी</a> ·
+  <a href="README.ru.md">🇷🇺 Русский</a> ·
+  <a href="README.bn.md">🇧🇩 বাংলা</a> ·
+  <a href="README.he.md">🇮🇱 עברית</a> ·
+  <a href="README.pl.md">🇵🇱 Polski</a> ·
+  <a href="README.cs.md">🇨🇿 Čeština</a> ·
+  <a href="README.nl.md">🇳🇱 Nederlands</a> ·
+  <a href="README.tr.md">🇹🇷 Türkçe</a> ·
+  <a href="README.uk.md">🇺🇦 Українська</a> ·
+  <a href="README.id.md">🇮🇩 Bahasa Indonesia</a> ·
+  <a href="README.th.md">🇹🇭 ไทย</a> ·
+  <a href="README.ur.md">🇵🇰 اردو</a> ·
+  <a href="README.ro.md">🇷🇴 Română</a> ·
+  <a href="README.sv.md">🇸🇪 Svenska</a> ·
+  <a href="README.el.md">🇬🇷 Ελληνικά</a> ·
+  <a href="README.hu.md">🇭🇺 Magyar</a> ·
+  <a href="README.fi.md">🇫🇮 Suomi</a> ·
+  <a href="README.da.md">🇩🇰 Dansk</a> ·
+  <a href="README.nb.md">🇳🇴 Norsk</a>
 </p>
 
 <p align="center">
-  <a href="bootstrap.sh">一键部署</a> |
-  <a href="docs/getting-started/README.md">安装入门</a> |
+  <a href="https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/master/install.sh">一键部署</a> |
+  <a href="docs/i18n/zh-CN/setup-guides/README.zh-CN.md">安装入门</a> |
   <a href="docs/README.zh-CN.md">文档总览</a> |
-  <a href="docs/SUMMARY.md">文档目录</a>
+  <a href="docs/SUMMARY.zh-CN.md">文档目录</a>
 </p>
 
 <p align="center">
   <strong>场景分流：</strong>
-  <a href="docs/reference/README.md">参考手册</a> ·
-  <a href="docs/operations/README.md">运维部署</a> ·
-  <a href="docs/troubleshooting.md">故障排查</a> ·
-  <a href="docs/security/README.md">安全专题</a> ·
-  <a href="docs/hardware/README.md">硬件外设</a> ·
-  <a href="docs/contributing/README.md">贡献与 CI</a>
+  <a href="docs/i18n/zh-CN/reference/README.zh-CN.md">参考手册</a> ·
+  <a href="docs/i18n/zh-CN/ops/README.zh-CN.md">运维部署</a> ·
+  <a href="docs/i18n/zh-CN/ops/troubleshooting.zh-CN.md">故障排查</a> ·
+  <a href="docs/i18n/zh-CN/security/README.zh-CN.md">安全专题</a> ·
+  <a href="docs/i18n/zh-CN/hardware/README.zh-CN.md">硬件外设</a> ·
+  <a href="docs/i18n/zh-CN/contributing/README.zh-CN.md">贡献与 CI</a>
 </p>
 
 > 本文是对 `README.md` 的人工对齐翻译（强调可读性与准确性，不做逐字直译）。
-> 
+>
 > 技术标识（命令、配置键、API 路径、Trait 名称）保持英文，避免语义漂移。
-> 
-> 最后对齐时间：**2026-02-22**。
+>
+> 最后对齐时间：**2026-03-14**。
+
+<!-- BEGIN:WHATS_NEW -->
+
+### 🚀 What's New in v0.3.1 (March 2026)
+
+| Area | Highlights |
+|---|---|
+| ci | add Termux (aarch64-linux-android) release target |
+
+<!-- END:WHATS_NEW -->
 
 ## 📢 公告板
 
@@ -54,7 +96,7 @@
 | 日期（UTC） | 级别 | 通知 | 处理建议 |
 |---|---|---|---|
 | 2026-02-19 | _紧急_ | 我们与 `openagen/zeroclaw` 及 `zeroclaw.org` **没有任何关系**。`zeroclaw.org` 当前会指向 `openagen/zeroclaw` 这个 fork，并且该域名/仓库正在冒充我们的官网与官方项目。 | 请不要相信上述来源发布的任何信息、二进制、募资活动或官方声明。请仅以[本仓库](https://github.com/zeroclaw-labs/zeroclaw)和已验证官方社媒为准。 |
-| 2026-02-21 | _重要_ | 我们的官网现已上线：[zeroclawlabs.ai](https://zeroclawlabs.ai)。感谢大家一直以来的耐心等待。我们仍在持续发现冒充行为，请勿参与任何未经我们官方渠道发布、但打着 ZeroClaw 名义进行的投资、募资或类似活动。 | 一切信息请以[本仓库](https://github.com/zeroclaw-labs/zeroclaw)为准；也可关注 [X（@zeroclawlabs）](https://x.com/zeroclawlabs?s=21)、[Telegram（@zeroclawlabs）](https://t.me/zeroclawlabs)、[Facebook（群组）](https://www.facebook.com/groups/zeroclaw)、[Reddit（r/zeroclawlabs）](https://www.reddit.com/r/zeroclawlabs/) 与 [小红书账号](https://www.xiaohongshu.com/user/profile/67cbfc43000000000d008307?xsec_token=AB73VnYnGNx5y36EtnnZfGmAmS-6Wzv8WMuGpfwfkg6Yc%3D&xsec_source=pc_search) 获取官方最新动态。 |
+| 2026-02-21 | _重要_ | 我们的官网现已上线：[zeroclawlabs.ai](https://zeroclawlabs.ai)。感谢大家一直以来的耐心等待。我们仍在持续发现冒充行为，请勿参与任何未经我们官方渠道发布、但打着 ZeroClaw 名义进行的投资、募资或类似活动。 | 一切信息请以[本仓库](https://github.com/zeroclaw-labs/zeroclaw)为准；也可关注 [X（@zeroclawlabs）](https://x.com/zeroclawlabs?s=21)、[Telegram（@zeroclawlabs）](https://t.me/zeroclawlabs)、[Facebook（群组）](https://www.facebook.com/groups/zeroclawlabs)、[Reddit（r/zeroclawlabs）](https://www.reddit.com/r/zeroclawlabs/) 与 [小红书账号](https://www.xiaohongshu.com/user/profile/67cbfc43000000000d008307?xsec_token=AB73VnYnGNx5y36EtnnZfGmAmS-6Wzv8WMuGpfwfkg6Yc%3D&xsec_source=pc_search) 获取官方最新动态。 |
 | 2026-02-19 | _重要_ | Anthropic 于 2026-02-19 更新了 Authentication and Credential Use 条款。条款明确：OAuth authentication（用于 Free、Pro、Max）仅适用于 Claude Code 与 Claude.ai；将 Claude Free/Pro/Max 账号获得的 OAuth token 用于其他任何产品、工具或服务（包括 Agent SDK）不被允许，并可能构成对 Consumer Terms of Service 的违规。 | 为避免损失，请暂时不要尝试 Claude Code OAuth 集成；原文见：[Authentication and Credential Use](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)。 |
 
 ## 项目简介
@@ -87,7 +129,7 @@ ZeroClaw 是一个高性能、低资源占用、可组合的自主智能体运�
 > 说明：ZeroClaw 的数据来自 release 构建，并通过 `/usr/bin/time -l` 测得。OpenClaw 需要 Node.js 运行时环境，仅该运行时通常就会带来约 390MB 的额外内存占用；NanoBot 需要 Python 运行时环境。PicoClaw 与 ZeroClaw 为静态二进制。
 
 <p align="center">
-  <img src="zero-claw.jpeg" alt="ZeroClaw vs OpenClaw 对比图" width="800" />
+  <img src="docs/assets/zeroclaw-comparison.jpeg" alt="ZeroClaw vs OpenClaw 对比图" width="800" />
 </p>
 
 ### 本地可复现测量
@@ -113,12 +155,12 @@ ls -lh target/release/zeroclaw
 ```bash
 git clone https://github.com/zeroclaw-labs/zeroclaw.git
 cd zeroclaw
-./bootstrap.sh
+./install.sh
 ```
 
-可选环境初始化：`./bootstrap.sh --install-system-deps --install-rust`（可能需要 `sudo`）。
+可选环境初始化：`./install.sh --install-system-deps --install-rust`（可能需要 `sudo`）。
 
-详细说明见：[`docs/one-click-bootstrap.md`](docs/one-click-bootstrap.md)。
+详细说明见：[`docs/setup-guides/one-click-bootstrap.md`](docs/i18n/zh-CN/setup-guides/one-click-bootstrap.zh-CN.md)。
 
 ## 快速开始
 
@@ -137,8 +179,8 @@ cargo install --path . --force --locked
 # 快速初始化（无交互）
 zeroclaw onboard --api-key sk-... --provider openrouter
 
-# 或使用交互式向导
-zeroclaw onboard --interactive
+# 或使用引导式向导
+zeroclaw onboard
 
 # 单次对话
 zeroclaw agent -m "Hello, ZeroClaw!"
@@ -148,6 +190,10 @@ zeroclaw gateway
 
 # 启动长期运行模式
 zeroclaw daemon
+
+# Migrate from OpenClaw
+zeroclaw migrate openclaw --dry-run
+zeroclaw migrate openclaw
 ```
 
 ## Subscription Auth（OpenAI Codex / Claude Code）
@@ -195,110 +241,26 @@ zeroclaw agent --provider openai-codex --auth-profile openai-codex:work -m "hell
 zeroclaw agent --provider anthropic -m "hello"
 ```
 
-## 架构
-
-每个子系统都是一个 **Trait** — 通过配置切换即可更换实现，无需修改代码。
-
-<p align="center">
-  <img src="docs/architecture.svg" alt="ZeroClaw 架构图" width="900" />
-</p>
-
-| 子系统 | Trait | 内置实现 | 扩展方式 |
-|--------|-------|----------|----------|
-| **AI 模型** | `Provider` | 通过 `zeroclaw providers` 查看（当前 28 个内置 + 别名，以及自定义端点） | `custom:https://your-api.com`（OpenAI 兼容）或 `anthropic-custom:https://your-api.com` |
-| **通道** | `Channel` | CLI, Telegram, Discord, Slack, Mattermost, iMessage, Matrix, Signal, WhatsApp, Linq, Email, IRC, Lark, DingTalk, QQ, Webhook | 任意消息 API |
-| **记忆** | `Memory` | SQLite 混合搜索, PostgreSQL 后端, Lucid 桥接, Markdown 文件, 显式 `none` 后端, 快照/恢复, 可选响应缓存 | 任意持久化后端 |
-| **工具** | `Tool` | shell/file/memory, cron/schedule, git, pushover, browser, http_request, screenshot/image_info, composio (opt-in), delegate, 硬件工具 | 任意能力 |
-| **可观测性** | `Observer` | Noop, Log, Multi | Prometheus, OTel |
-| **运行时** | `RuntimeAdapter` | Native, Docker（沙箱） | 通过 adapter 添加；不支持的类型会快速失败 |
-| **安全** | `SecurityPolicy` | Gateway 配对, 沙箱, allowlist, 速率限制, 文件系统作用域, 加密密钥 | — |
-| **身份** | `IdentityConfig` | OpenClaw (markdown), AIEOS v1.1 (JSON) | 任意身份格式 |
-| **隧道** | `Tunnel` | None, Cloudflare, Tailscale, ngrok, Custom | 任意隧道工具 |
-| **心跳** | Engine | HEARTBEAT.md 定期任务 | — |
-| **技能** | Loader | TOML 清单 + SKILL.md 指令 | 社区技能包 |
-| **集成** | Registry | 9 个分类下 70+ 集成 | 插件系统 |
-
-### 运行时支持（当前）
-
-- ✅ 当前支持：`runtime.kind = "native"` 或 `runtime.kind = "docker"`
-- 🚧 计划中，尚未实现：WASM / 边缘运行时
-
-配置了不支持的 `runtime.kind` 时，ZeroClaw 会以明确的错误退出，而非静默回退到 native。
-
-### 记忆系统（全栈搜索引擎）
-
-全部自研，零外部依赖 — 无需 Pinecone、Elasticsearch、LangChain：
-
-| 层级 | 实现 |
-|------|------|
-| **向量数据库** | Embeddings 以 BLOB 存储于 SQLite，余弦相似度搜索 |
-| **关键词搜索** | FTS5 虚拟表，BM25 评分 |
-| **混合合并** | 自定义加权合并函数（`vector.rs`） |
-| **Embeddings** | `EmbeddingProvider` trait — OpenAI、自定义 URL 或 noop |
-| **分块** | 基于行的 Markdown 分块器，保留标题结构 |
-| **缓存** | SQLite `embedding_cache` 表，LRU 淘汰策略 |
-| **安全重索引** | 原子化重建 FTS5 + 重新嵌入缺失向量 |
-
-Agent 通过工具自动进行记忆的回忆、保存和管理。
-
-```toml
-[memory]
-backend = "sqlite"             # "sqlite", "lucid", "postgres", "markdown", "none"
-auto_save = true
-embedding_provider = "none"    # "none", "openai", "custom:https://..."
-vector_weight = 0.7
-keyword_weight = 0.3
-```
-
-## 安全默认行为（关键）
-
-- Gateway 默认绑定：`127.0.0.1:42617`
-- Gateway 默认要求配对：`require_pairing = true`
-- 默认拒绝公网绑定：`allow_public_bind = false`
-- Channel allowlist 语义：
-  - 空列表 `[]` => deny-by-default
-  - `"*"` => allow all（仅在明确知道风险时使用）
-
-## 常用配置片段
-
-```toml
-api_key = "sk-..."
-default_provider = "openrouter"
-default_model = "anthropic/claude-sonnet-4-6"
-default_temperature = 0.7
-
-[memory]
-backend = "sqlite"             # sqlite | lucid | markdown | none
-auto_save = true
-embedding_provider = "none"    # none | openai | custom:https://...
-
-[gateway]
-host = "127.0.0.1"
-port = 42617
-require_pairing = true
-allow_public_bind = false
-```
-
-## 文档导航（推荐从这里开始）
-
-- 文档总览（英文）：[`docs/README.md`](docs/README.md)
-- 统一目录（TOC）：[`docs/SUMMARY.md`](docs/SUMMARY.md)
-- 文档总览（简体中文）：[`docs/README.zh-CN.md`](docs/README.zh-CN.md)
-- 命令参考：[`docs/commands-reference.md`](docs/commands-reference.md)
-- 配置参考：[`docs/config-reference.md`](docs/config-reference.md)
-- Provider 参考：[`docs/providers-reference.md`](docs/providers-reference.md)
-- Channel 参考：[`docs/channels-reference.md`](docs/channels-reference.md)
-- 运维手册：[`docs/operations-runbook.md`](docs/operations-runbook.md)
-- 故障排查：[`docs/troubleshooting.md`](docs/troubleshooting.md)
-- 文档清单与分类：[`docs/docs-inventory.md`](docs/docs-inventory.md)
-- 项目 triage 快照（2026-02-18）：[`docs/project-triage-snapshot-2026-02-18.md`](docs/project-triage-snapshot-2026-02-18.md)
-
 ## 贡献与许可证
 
 - 贡献指南：[`CONTRIBUTING.md`](CONTRIBUTING.md)
-- PR 工作流：[`docs/pr-workflow.md`](docs/pr-workflow.md)
-- Reviewer 指南：[`docs/reviewer-playbook.md`](docs/reviewer-playbook.md)
+- PR 工作流：[`docs/contributing/pr-workflow.md`](docs/i18n/zh-CN/contributing/pr-workflow.zh-CN.md)
+- Reviewer 指南：[`docs/contributing/reviewer-playbook.md`](docs/i18n/zh-CN/contributing/reviewer-playbook.zh-CN.md)
 - 许可证：MIT 或 Apache 2.0（见 [`LICENSE-MIT`](LICENSE-MIT)、[`LICENSE-APACHE`](LICENSE-APACHE) 与 [`NOTICE`](NOTICE)）
+
+<!-- BEGIN:RECENT_CONTRIBUTORS -->
+
+### 🌟 Recent Contributors (v0.3.1)
+
+3 contributors shipped features, fixes, and improvements in this release cycle:
+
+- **Argenis**
+- **argenis de la rosa**
+- **Claude Opus 4.6**
+
+Thank you to everyone who opened issues, reviewed PRs, translated docs, and helped test. Every contribution matters. 🦀
+
+<!-- END:RECENT_CONTRIBUTORS -->
 
 ---
 

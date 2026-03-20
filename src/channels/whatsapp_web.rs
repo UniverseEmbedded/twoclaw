@@ -64,6 +64,17 @@ pub struct WhatsAppWebChannel {
     client: Arc<Mutex<Option<Arc<wa_rs::Client>>>>,
     /// Message sender channel
     tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ChannelMessage>>>>,
+    /// Voice transcription (STT) config
+    transcription: Option<crate::config::TranscriptionConfig>,
+    /// Text-to-speech config for voice replies
+    tts_config: Option<crate::config::TtsConfig>,
+    /// Chats awaiting a voice reply — maps chat JID to the latest substantive
+    /// reply text. A background task debounces and sends the voice note after
+    /// the agent finishes its turn (no new send() for 3 seconds).
+    pending_voice:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, (String, std::time::Instant)>>>,
+    /// Chats whose last incoming message was a voice note.
+    voice_chats: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl WhatsAppWebChannel {
@@ -90,7 +101,29 @@ impl WhatsAppWebChannel {
             bot_handle: Arc::new(Mutex::new(None)),
             client: Arc::new(Mutex::new(None)),
             tx: Arc::new(Mutex::new(None)),
+            transcription: None,
+            tts_config: None,
+            pending_voice: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            voice_chats: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Configure voice transcription (STT) for incoming voice notes.
+    #[cfg(feature = "whatsapp-web")]
+    pub fn with_transcription(mut self, config: crate::config::TranscriptionConfig) -> Self {
+        if config.enabled {
+            self.transcription = Some(config);
+        }
+        self
+    }
+
+    /// Configure text-to-speech for outgoing voice replies.
+    #[cfg(feature = "whatsapp-web")]
+    pub fn with_tts(mut self, config: crate::config::TtsConfig) -> Self {
+        if config.enabled {
+            self.tts_config = Some(config);
+        }
+        self
     }
 
     /// Check if a phone number is allowed (E.164 format: +1234567890)
@@ -233,6 +266,176 @@ impl WhatsAppWebChannel {
 
         Ok(wa_rs_binary::jid::Jid::pn(digits))
     }
+
+    // ── Reconnect state-machine helpers (used by listen() and tested directly) ──
+
+    /// Reconnect retry constants.
+    const MAX_RETRIES: u32 = 10;
+    const BASE_DELAY_SECS: u64 = 3;
+    const MAX_DELAY_SECS: u64 = 300;
+
+    /// Compute the exponential-backoff delay for a given 1-based attempt number.
+    /// Doubles each attempt from `BASE_DELAY_SECS`, capped at `MAX_DELAY_SECS`.
+    fn compute_retry_delay(attempt: u32) -> u64 {
+        std::cmp::min(
+            Self::BASE_DELAY_SECS.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1))),
+            Self::MAX_DELAY_SECS,
+        )
+    }
+
+    /// Determine whether session files should be purged.
+    /// Returns `true` only when `Event::LoggedOut` was explicitly observed.
+    fn should_purge_session(session_revoked: &std::sync::atomic::AtomicBool) -> bool {
+        session_revoked.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record a reconnect attempt and return `(attempt_number, exceeded_max)`.
+    fn record_retry(retry_count: &std::sync::atomic::AtomicU32) -> (u32, bool) {
+        let attempts = retry_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        (attempts, attempts > Self::MAX_RETRIES)
+    }
+
+    /// Reset the retry counter (called on `Event::Connected`).
+    fn reset_retry(retry_count: &std::sync::atomic::AtomicU32) {
+        retry_count.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Return the session file paths to remove (primary + WAL + SHM sidecars).
+    fn session_file_paths(expanded_session_path: &str) -> [String; 3] {
+        [
+            expanded_session_path.to_string(),
+            format!("{expanded_session_path}-wal"),
+            format!("{expanded_session_path}-shm"),
+        ]
+    }
+
+    /// Attempt to download and transcribe a WhatsApp voice note.
+    ///
+    /// Returns `None` if transcription is disabled, download fails, or
+    /// transcription fails (all logged as warnings).
+    #[cfg(feature = "whatsapp-web")]
+    async fn try_transcribe_voice_note(
+        client: &wa_rs::Client,
+        audio: &wa_rs_proto::whatsapp::message::AudioMessage,
+        transcription_config: Option<&crate::config::TranscriptionConfig>,
+    ) -> Option<String> {
+        let config = transcription_config?;
+
+        // Enforce duration limit
+        if let Some(seconds) = audio.seconds {
+            if u64::from(seconds) > config.max_duration_secs {
+                tracing::info!(
+                    "WhatsApp Web: skipping voice note ({}s exceeds {}s limit)",
+                    seconds,
+                    config.max_duration_secs
+                );
+                return None;
+            }
+        }
+
+        // Download the encrypted audio
+        use wa_rs::download::Downloadable;
+        let audio_data = match client.download(audio as &dyn Downloadable).await {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!("WhatsApp Web: failed to download voice note: {e}");
+                return None;
+            }
+        };
+
+        // Determine filename from mimetype for transcription API
+        let file_name = match audio.mimetype.as_deref() {
+            Some(m) if m.contains("opus") || m.contains("ogg") => "voice.ogg",
+            Some(m) if m.contains("mp4") || m.contains("m4a") => "voice.m4a",
+            Some(m) if m.contains("mpeg") || m.contains("mp3") => "voice.mp3",
+            Some(m) if m.contains("webm") => "voice.webm",
+            _ => "voice.ogg", // WhatsApp default
+        };
+
+        tracing::info!(
+            "WhatsApp Web: transcribing voice note ({} bytes, file={})",
+            audio_data.len(),
+            file_name
+        );
+
+        match super::transcription::transcribe_audio(audio_data, file_name, config).await {
+            Ok(text) if text.trim().is_empty() => {
+                tracing::info!("WhatsApp Web: voice transcription returned empty text, skipping");
+                None
+            }
+            Ok(text) => {
+                tracing::info!(
+                    "WhatsApp Web: voice note transcribed ({} chars)",
+                    text.len()
+                );
+                Some(text)
+            }
+            Err(e) => {
+                tracing::warn!("WhatsApp Web: voice transcription failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// Synthesize text to speech and send as a WhatsApp voice note (static version for spawned tasks).
+    #[cfg(feature = "whatsapp-web")]
+    async fn synthesize_voice_static(
+        client: &wa_rs::Client,
+        to: &wa_rs_binary::jid::Jid,
+        text: &str,
+        tts_config: &crate::config::TtsConfig,
+    ) -> Result<()> {
+        let tts_manager = super::tts::TtsManager::new(tts_config)?;
+        let audio_bytes = tts_manager.synthesize(text).await?;
+        let audio_len = audio_bytes.len();
+        tracing::info!("WhatsApp Web TTS: synthesized {} bytes of audio", audio_len);
+
+        if audio_bytes.is_empty() {
+            anyhow::bail!("TTS returned empty audio");
+        }
+
+        use wa_rs_core::download::MediaType;
+        let upload = client
+            .upload(audio_bytes, MediaType::Audio)
+            .await
+            .map_err(|e| anyhow!("Failed to upload TTS audio: {e}"))?;
+
+        tracing::info!(
+            "WhatsApp Web TTS: uploaded audio (url_len={}, file_length={})",
+            upload.url.len(),
+            upload.file_length
+        );
+
+        // Estimate duration: Opus at ~32kbps → bytes / 4000 ≈ seconds
+        #[allow(clippy::cast_possible_truncation)]
+        let estimated_seconds = std::cmp::max(1, (upload.file_length / 4000) as u32);
+
+        let voice_msg = wa_rs_proto::whatsapp::Message {
+            audio_message: Some(Box::new(wa_rs_proto::whatsapp::message::AudioMessage {
+                url: Some(upload.url),
+                direct_path: Some(upload.direct_path),
+                media_key: Some(upload.media_key),
+                file_enc_sha256: Some(upload.file_enc_sha256),
+                file_sha256: Some(upload.file_sha256),
+                file_length: Some(upload.file_length),
+                mimetype: Some("audio/ogg; codecs=opus".to_string()),
+                ptt: Some(true),
+                seconds: Some(estimated_seconds),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        Box::pin(client.send_message(to.clone(), voice_msg))
+            .await
+            .map_err(|e| anyhow!("Failed to send voice note: {e}"))?;
+        tracing::info!(
+            "WhatsApp Web TTS: sent voice note ({} bytes, ~{}s)",
+            audio_len,
+            estimated_seconds
+        );
+        Ok(())
+    }
 }
 
 #[cfg(feature = "whatsapp-web")]
@@ -261,6 +464,88 @@ impl Channel for WhatsAppWebChannel {
         }
 
         let to = self.recipient_to_jid(&message.recipient)?;
+
+        // Voice chat mode: send text normally AND queue a voice note of the
+        // final answer. Only substantive messages (not tool outputs) are queued.
+        // A debounce task waits 10s after the last substantive message, then
+        // sends ONE voice note. Text in → text out. Voice in → text + voice out.
+        let is_voice_chat = self
+            .voice_chats
+            .lock()
+            .map(|vs| vs.contains(&message.recipient))
+            .unwrap_or(false);
+
+        if is_voice_chat && self.tts_config.is_some() {
+            let content = &message.content;
+            // Only queue substantive natural-language replies for voice.
+            // Skip tool outputs: URLs, JSON, code blocks, errors, short status.
+            let is_substantive = content.len() > 40
+                && !content.starts_with("http")
+                && !content.starts_with('{')
+                && !content.starts_with('[')
+                && !content.starts_with("Error")
+                && !content.contains("```")
+                && !content.contains("tool_call")
+                && !content.contains("wttr.in");
+
+            if is_substantive {
+                if let Ok(mut pv) = self.pending_voice.lock() {
+                    pv.insert(
+                        message.recipient.clone(),
+                        (content.clone(), std::time::Instant::now()),
+                    );
+                }
+
+                let pending = self.pending_voice.clone();
+                let voice_chats = self.voice_chats.clone();
+                let client_clone = client.clone();
+                let to_clone = to.clone();
+                let recipient = message.recipient.clone();
+                let tts_config = self.tts_config.clone().unwrap();
+                tokio::spawn(async move {
+                    // Wait 10 seconds — long enough for the agent to finish its
+                    // full tool chain and send the final answer.
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+                    // Atomic check-and-remove: only one task gets the value
+                    let to_voice = pending.lock().ok().and_then(|mut pv| {
+                        if let Some((_, ts)) = pv.get(&recipient) {
+                            if ts.elapsed().as_secs() >= 8 {
+                                return pv.remove(&recipient).map(|(text, _)| text);
+                            }
+                        }
+                        None
+                    });
+
+                    if let Some(text) = to_voice {
+                        if let Ok(mut vc) = voice_chats.lock() {
+                            vc.remove(&recipient);
+                        }
+                        match Box::pin(WhatsAppWebChannel::synthesize_voice_static(
+                            &client_clone,
+                            &to_clone,
+                            &text,
+                            &tts_config,
+                        ))
+                        .await
+                        {
+                            Ok(()) => {
+                                tracing::info!(
+                                    "WhatsApp Web: voice reply sent ({} chars)",
+                                    text.len()
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("WhatsApp Web: TTS voice reply failed: {e}");
+                            }
+                        }
+                    }
+                });
+            }
+            // Fall through to send text normally (voice chat gets BOTH)
+        }
+
+        // Send text message
         let outgoing = wa_rs_proto::whatsapp::Message {
             conversation: Some(message.content.clone()),
             ..Default::default()
@@ -268,7 +553,7 @@ impl Channel for WhatsAppWebChannel {
 
         let message_id = client.send_message(to, outgoing).await?;
         tracing::debug!(
-            "WhatsApp Web: sent message to {} (id: {})",
+            "WhatsApp Web: sent text to {} (id: {})",
             message.recipient,
             message_id
         );
@@ -288,87 +573,157 @@ impl Channel for WhatsAppWebChannel {
         use wa_rs_tokio_transport::TokioWebSocketTransportFactory;
         use wa_rs_ureq_http::UreqHttpClient;
 
-        tracing::info!(
-            "WhatsApp Web channel starting (session: {})",
-            self.session_path
-        );
+        let retry_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
-        // Initialize storage backend
-        let storage = RusqliteStore::new(&self.session_path)?;
-        let backend = Arc::new(storage);
+        loop {
+            let expanded_session_path = shellexpand::tilde(&self.session_path).to_string();
 
-        // Check if we have a saved device to load
-        let mut device = Device::new(backend.clone());
-        if backend.exists().await? {
-            tracing::info!("WhatsApp Web: found existing session, loading device");
-            if let Some(core_device) = backend.load().await? {
-                device.load_from_serializable(core_device);
-            } else {
-                anyhow::bail!("Device exists but failed to load");
-            }
-        } else {
             tracing::info!(
-                "WhatsApp Web: no existing session, new device will be created during pairing"
+                "WhatsApp Web channel starting (session: {})",
+                expanded_session_path
             );
-        };
 
-        // Create transport factory
-        let mut transport_factory = TokioWebSocketTransportFactory::new();
-        if let Ok(ws_url) = std::env::var("WHATSAPP_WS_URL") {
-            transport_factory = transport_factory.with_url(ws_url);
-        }
+            // Initialize storage backend
+            let storage = RusqliteStore::new(&expanded_session_path)?;
+            let backend = Arc::new(storage);
 
-        // Create HTTP client for media operations
-        let http_client = UreqHttpClient::new();
+            // Check if we have a saved device to load
+            let mut device = Device::new(backend.clone());
+            if backend.exists().await? {
+                tracing::info!("WhatsApp Web: found existing session, loading device");
+                if let Some(core_device) = backend.load().await? {
+                    device.load_from_serializable(core_device);
+                } else {
+                    anyhow::bail!("Device exists but failed to load");
+                }
+            } else {
+                tracing::info!(
+                    "WhatsApp Web: no existing session, new device will be created during pairing"
+                );
+            };
 
-        // Build the bot
-        let tx_clone = tx.clone();
-        let allowed_numbers = self.allowed_numbers.clone();
+            // Create transport factory
+            let mut transport_factory = TokioWebSocketTransportFactory::new();
+            if let Ok(ws_url) = std::env::var("WHATSAPP_WS_URL") {
+                transport_factory = transport_factory.with_url(ws_url);
+            }
 
-        let mut builder = Bot::builder()
-            .with_backend(backend)
-            .with_transport_factory(transport_factory)
-            .with_http_client(http_client)
-            .on_event(move |event, _client| {
-                let tx_inner = tx_clone.clone();
-                let allowed_numbers = allowed_numbers.clone();
-                async move {
-                    match event {
-                        Event::Message(msg, info) => {
-                            // Extract message content
-                            let text = msg.text_content().unwrap_or("");
-                            let sender_jid = info.source.sender.clone();
-                            let sender_alt = info.source.sender_alt.clone();
-                            let sender = sender_jid.user().to_string();
-                            let chat = info.source.chat.to_string();
+            // Create HTTP client for media operations
+            let http_client = UreqHttpClient::new();
 
-                            tracing::info!(
-                                "WhatsApp Web message from {} in {}: {}",
-                                sender,
-                                chat,
-                                text
-                            );
+            // Channel to signal logout from the event handler back to the listen loop.
+            let (logout_tx, mut logout_rx) = tokio::sync::broadcast::channel::<()>(1);
 
-                            let mapped_phone = if sender_jid.is_lid() {
-                                _client.get_phone_number_from_lid(&sender_jid.user).await
-                            } else {
-                                None
-                            };
-                            let sender_candidates = Self::sender_phone_candidates(
-                                &sender_jid,
-                                sender_alt.as_ref(),
-                                mapped_phone.as_deref(),
-                            );
+            // Tracks whether Event::LoggedOut actually fired (vs task crash).
+            let session_revoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-                            if let Some(normalized) = sender_candidates
-                                .iter()
-                                .find(|candidate| {
-                                    Self::is_number_allowed_for_list(&allowed_numbers, candidate)
-                                })
-                                .cloned()
-                            {
-                                let trimmed = text.trim();
-                                if trimmed.is_empty() {
+            // Build the bot
+            let tx_clone = tx.clone();
+            let allowed_numbers = self.allowed_numbers.clone();
+            let logout_tx_clone = logout_tx.clone();
+            let retry_count_clone = retry_count.clone();
+            let session_revoked_clone = session_revoked.clone();
+            let transcription_config = self.transcription.clone();
+
+            let transcription_config = self.transcription.clone();
+            let voice_chats = self.voice_chats.clone();
+
+            let mut builder = Bot::builder()
+                .with_backend(backend)
+                .with_transport_factory(transport_factory)
+                .with_http_client(http_client)
+                .on_event(move |event, client| {
+                    let tx_inner = tx_clone.clone();
+                    let allowed_numbers = allowed_numbers.clone();
+                    let logout_tx = logout_tx_clone.clone();
+                    let retry_count = retry_count_clone.clone();
+                    let session_revoked = session_revoked_clone.clone();
+                    let transcription_config = transcription_config.clone();
+                    let voice_chats = voice_chats.clone();
+                    async move {
+                        match event {
+                            Event::Message(msg, info) => {
+                                let sender_jid = info.source.sender.clone();
+                                let sender_alt = info.source.sender_alt.clone();
+                                let sender = sender_jid.user().to_string();
+                                let chat = info.source.chat.to_string();
+
+                                let mapped_phone = if sender_jid.is_lid() {
+                                    client.get_phone_number_from_lid(&sender_jid.user).await
+                                } else {
+                                    None
+                                };
+                                let sender_candidates = Self::sender_phone_candidates(
+                                    &sender_jid,
+                                    sender_alt.as_ref(),
+                                    mapped_phone.as_deref(),
+                                );
+
+                                let normalized = match sender_candidates
+                                    .iter()
+                                    .find(|candidate| {
+                                        Self::is_number_allowed_for_list(&allowed_numbers, candidate)
+                                    })
+                                    .cloned()
+                                {
+                                    Some(n) => n,
+                                    None => {
+                                        tracing::warn!(
+                                            "WhatsApp Web: message from unrecognized sender not in allowed list (candidates_count={})",
+                                            sender_candidates.len()
+                                        );
+                                        return;
+                                    }
+                                };
+
+                                // Attempt voice note transcription (ptt = push-to-talk = voice note)
+                                let voice_text = if let Some(ref audio) = msg.audio_message {
+                                    if audio.ptt == Some(true) {
+                                        Self::try_transcribe_voice_note(
+                                            &client,
+                                            audio,
+                                            transcription_config.as_ref(),
+                                        )
+                                        .await
+                                    } else {
+                                        tracing::debug!(
+                                            "WhatsApp Web: ignoring non-PTT audio message from {}",
+                                            normalized
+                                        );
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+
+                                // Use transcribed voice text, or fall back to text content.
+                                // Track whether this chat used a voice note so we reply in kind.
+                                // We store the chat JID (reply_target) since that's what send() receives.
+                                let content = if let Some(ref vt) = voice_text {
+                                    if let Ok(mut vs) = voice_chats.lock() {
+                                        vs.insert(chat.clone());
+                                    }
+                                    format!("[Voice] {vt}")
+                                } else {
+                                    if let Ok(mut vs) = voice_chats.lock() {
+                                        vs.remove(&chat);
+                                    }
+                                    let text = msg.text_content().unwrap_or("");
+                                    text.trim().to_string()
+                                };
+
+                                tracing::info!(
+                                    "WhatsApp Web message received (sender_len={}, chat_len={}, content_len={})",
+                                    sender.len(),
+                                    chat.len(),
+                                    content.len()
+                                );
+                                tracing::debug!(
+                                    "WhatsApp Web message content: {}",
+                                    content
+                                );
+
+                                if content.is_empty() {
                                     tracing::debug!(
                                         "WhatsApp Web: ignoring empty or non-text message from {}",
                                         normalized
@@ -383,103 +738,167 @@ impl Channel for WhatsAppWebChannel {
                                         sender: normalized.clone(),
                                         // Reply to the originating chat JID (DM or group).
                                         reply_target: chat,
-                                        content: trimmed.to_string(),
+                                        content,
                                         timestamp: chrono::Utc::now().timestamp() as u64,
                                         thread_ts: None,
+                                        interruption_scope_id: None,
                                     })
                                     .await
                                 {
                                     tracing::error!("Failed to send message to channel: {}", e);
                                 }
-                            } else {
+                            }
+                            Event::Connected(_) => {
+                                tracing::info!("WhatsApp Web connected successfully");
+                                WhatsAppWebChannel::reset_retry(&retry_count);
+                            }
+                            Event::LoggedOut(_) => {
+                                session_revoked.store(true, std::sync::atomic::Ordering::Relaxed);
                                 tracing::warn!(
-                                    "WhatsApp Web: message from {} not in allowed list (candidates: {:?})",
-                                    sender_jid,
-                                    sender_candidates
+                                    "WhatsApp Web was logged out — will clear session and reconnect"
                                 );
+                                let _ = logout_tx.send(());
                             }
-                        }
-                        Event::Connected(_) => {
-                            tracing::info!("WhatsApp Web connected successfully");
-                        }
-                        Event::LoggedOut(_) => {
-                            tracing::warn!("WhatsApp Web was logged out");
-                        }
-                        Event::StreamError(stream_error) => {
-                            tracing::error!("WhatsApp Web stream error: {:?}", stream_error);
-                        }
-                        Event::PairingCode { code, .. } => {
-                            tracing::info!("WhatsApp Web pair code received: {}", code);
-                            tracing::info!(
-                                "Link your phone by entering this code in WhatsApp > Linked Devices"
-                            );
-                        }
-                        Event::PairingQrCode { code, .. } => {
-                            tracing::info!(
-                                "WhatsApp Web QR code received (scan with WhatsApp > Linked Devices)"
-                            );
-                            match Self::render_pairing_qr(&code) {
-                                Ok(rendered) => {
-                                    eprintln!();
-                                    eprintln!(
-                                        "WhatsApp Web QR code (scan in WhatsApp > Linked Devices):"
-                                    );
-                                    eprintln!("{rendered}");
-                                    eprintln!();
-                                }
-                                Err(err) => {
-                                    tracing::warn!(
-                                        "WhatsApp Web: failed to render pairing QR in terminal: {}",
-                                        err
-                                    );
-                                    tracing::info!("WhatsApp Web QR payload: {}", code);
+                            Event::StreamError(stream_error) => {
+                                tracing::error!("WhatsApp Web stream error: {:?}", stream_error);
+                            }
+                            Event::PairingCode { code, .. } => {
+                                tracing::info!("WhatsApp Web pair code received");
+                                tracing::info!(
+                                    "Link your phone by entering this code in WhatsApp > Linked Devices"
+                                );
+                                eprintln!();
+                                eprintln!("WhatsApp Web pair code: {code}");
+                                eprintln!();
+                            }
+                            Event::PairingQrCode { code, .. } => {
+                                tracing::info!(
+                                    "WhatsApp Web QR code received (scan with WhatsApp > Linked Devices)"
+                                );
+                                match Self::render_pairing_qr(&code) {
+                                    Ok(rendered) => {
+                                        eprintln!();
+                                        eprintln!(
+                                            "WhatsApp Web QR code (scan in WhatsApp > Linked Devices):"
+                                        );
+                                        eprintln!("{rendered}");
+                                        eprintln!();
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "WhatsApp Web: failed to render pairing QR in terminal: {}",
+                                            err
+                                        );
+                                        eprintln!();
+                                        eprintln!("WhatsApp Web QR payload: {code}");
+                                        eprintln!();
+                                    }
                                 }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
+                });
+
+            // Configure pair-code flow when a phone number is provided.
+            if let Some(ref phone) = self.pair_phone {
+                tracing::info!("WhatsApp Web: pair-code flow enabled for configured phone number");
+                builder = builder.with_pair_code(PairCodeOptions {
+                    phone_number: phone.clone(),
+                    custom_code: self.pair_code.clone(),
+                    ..Default::default()
+                });
+            } else if self.pair_code.is_some() {
+                tracing::warn!(
+                    "WhatsApp Web: pair_code is set but pair_phone is missing; pair code config is ignored"
+                );
+            }
+
+            let mut bot = builder.build().await?;
+            *self.client.lock() = Some(bot.client());
+
+            // Run the bot
+            let bot_handle = bot.run().await?;
+
+            // Store the bot handle for later shutdown
+            *self.bot_handle.lock() = Some(bot_handle);
+
+            // Drop the outer sender so logout_rx.recv() returns Err when the
+            // bot task ends without emitting LoggedOut (e.g. crash/panic).
+            drop(logout_tx);
+
+            // Wait for a logout signal or process shutdown.
+            let should_reconnect = select! {
+                res = logout_rx.recv() => {
+                    // Both Ok(()) and Err (sender dropped) mean the session ended.
+                    let _ = res;
+                    true
                 }
-            })
-            ;
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("WhatsApp Web channel received Ctrl+C");
+                    false
+                }
+            };
 
-        // Configure pair-code flow when a phone number is provided.
-        if let Some(ref phone) = self.pair_phone {
-            tracing::info!("WhatsApp Web: pair-code flow enabled for configured phone number");
-            builder = builder.with_pair_code(PairCodeOptions {
-                phone_number: phone.clone(),
-                custom_code: self.pair_code.clone(),
-                ..Default::default()
-            });
-        } else if self.pair_code.is_some() {
-            tracing::warn!(
-                "WhatsApp Web: pair_code is set but pair_phone is missing; pair code config is ignored"
-            );
-        }
-
-        let mut bot = builder.build().await?;
-        *self.client.lock() = Some(bot.client());
-
-        // Run the bot
-        let bot_handle = bot.run().await?;
-
-        // Store the bot handle for later shutdown
-        *self.bot_handle.lock() = Some(bot_handle);
-
-        // Wait for shutdown signal
-        let (_shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
-
-        select! {
-            _ = shutdown_rx.recv() => {
-                tracing::info!("WhatsApp Web channel shutting down");
+            *self.client.lock() = None;
+            let handle = self.bot_handle.lock().take();
+            if let Some(handle) = handle {
+                handle.abort();
+                // Await the aborted task so background I/O finishes before
+                // we delete session files.
+                let _ = handle.await;
             }
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("WhatsApp Web channel received Ctrl+C");
-            }
-        }
 
-        *self.client.lock() = None;
-        if let Some(handle) = self.bot_handle.lock().take() {
-            handle.abort();
+            // Drop bot/device so the SQLite connection is closed
+            // before we remove session files (releases WAL/SHM locks).
+            // `backend` was moved into the builder, so dropping `bot`
+            // releases the last Arc reference to the storage backend.
+            drop(bot);
+            drop(device);
+
+            if should_reconnect {
+                let (attempts, exceeded) = Self::record_retry(&retry_count);
+                if exceeded {
+                    anyhow::bail!(
+                        "WhatsApp Web: exceeded {} reconnect attempts, giving up",
+                        Self::MAX_RETRIES
+                    );
+                }
+
+                // Only purge session files when LoggedOut was explicitly observed.
+                // A transient task crash (Err from recv) should not wipe a valid session.
+                if Self::should_purge_session(&session_revoked) {
+                    for path in Self::session_file_paths(&expanded_session_path) {
+                        match tokio::fs::remove_file(&path).await {
+                            Ok(()) => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(e) => tracing::warn!(
+                                "WhatsApp Web: failed to remove session file {}: {e}",
+                                path
+                            ),
+                        }
+                    }
+                    tracing::info!(
+                        "WhatsApp Web: session files removed, restarting for QR pairing"
+                    );
+                } else {
+                    tracing::warn!(
+                        "WhatsApp Web: bot stopped without LoggedOut; reconnecting with existing session"
+                    );
+                }
+
+                let delay = Self::compute_retry_delay(attempts);
+                tracing::info!(
+                    "WhatsApp Web: reconnecting in {}s (attempt {}/{})",
+                    delay,
+                    attempts,
+                    Self::MAX_RETRIES
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                continue;
+            }
+
+            break;
         }
 
         Ok(())
@@ -562,6 +981,14 @@ impl WhatsAppWebChannel {
         _allowed_numbers: Vec<String>,
     ) -> Self {
         Self { _private: () }
+    }
+
+    pub fn with_transcription(self, _config: crate::config::TranscriptionConfig) -> Self {
+        self
+    }
+
+    pub fn with_tts(self, _config: crate::config::TtsConfig) -> Self {
+        self
     }
 }
 
@@ -719,5 +1146,120 @@ mod tests {
     async fn whatsapp_web_health_check_disconnected() {
         let ch = make_channel();
         assert!(!ch.health_check().await);
+    }
+
+    // ── Reconnect retry state machine tests (exercise production helpers) ──
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn compute_retry_delay_doubles_with_cap() {
+        // Uses the production helper that listen() calls for backoff.
+        // attempt 1 → 3s, 2 → 6s, 3 → 12s, … 7 → 192s, 8 → 300s (capped)
+        let expected = [3, 6, 12, 24, 48, 96, 192, 300, 300, 300];
+        for (i, &want) in expected.iter().enumerate() {
+            let attempt = (i + 1) as u32;
+            assert_eq!(
+                WhatsAppWebChannel::compute_retry_delay(attempt),
+                want,
+                "attempt {attempt}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn compute_retry_delay_zero_attempt() {
+        // Edge case: attempt 0 should still produce BASE (saturating_sub clamps).
+        assert_eq!(
+            WhatsAppWebChannel::compute_retry_delay(0),
+            WhatsAppWebChannel::BASE_DELAY_SECS
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn record_retry_increments_and_detects_exceeded() {
+        use std::sync::atomic::AtomicU32;
+        let counter = AtomicU32::new(0);
+
+        // First MAX_RETRIES attempts should not exceed.
+        for i in 1..=WhatsAppWebChannel::MAX_RETRIES {
+            let (attempt, exceeded) = WhatsAppWebChannel::record_retry(&counter);
+            assert_eq!(attempt, i);
+            assert!(!exceeded, "attempt {i} should not exceed max");
+        }
+
+        // Next attempt exceeds the limit.
+        let (attempt, exceeded) = WhatsAppWebChannel::record_retry(&counter);
+        assert_eq!(attempt, WhatsAppWebChannel::MAX_RETRIES + 1);
+        assert!(exceeded);
+    }
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn reset_retry_clears_counter() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let counter = AtomicU32::new(0);
+
+        // Simulate several reconnect attempts via the production helper.
+        for _ in 0..5 {
+            WhatsAppWebChannel::record_retry(&counter);
+        }
+        assert_eq!(counter.load(Ordering::Relaxed), 5);
+
+        // Event::Connected calls reset_retry — verify it zeroes the counter.
+        WhatsAppWebChannel::reset_retry(&counter);
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+
+        // After reset, record_retry starts from 1 again.
+        let (attempt, exceeded) = WhatsAppWebChannel::record_retry(&counter);
+        assert_eq!(attempt, 1);
+        assert!(!exceeded);
+    }
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn should_purge_session_only_when_revoked() {
+        use std::sync::atomic::AtomicBool;
+        let flag = AtomicBool::new(false);
+
+        // Transient crash: flag is false → should NOT purge.
+        assert!(!WhatsAppWebChannel::should_purge_session(&flag));
+
+        // Explicit LoggedOut: flag set to true → should purge.
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(WhatsAppWebChannel::should_purge_session(&flag));
+    }
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn with_transcription_sets_config_when_enabled() {
+        let mut tc = crate::config::TranscriptionConfig::default();
+        tc.enabled = true;
+
+        let ch = make_channel().with_transcription(tc);
+        assert!(ch.transcription.is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn with_transcription_ignores_when_disabled() {
+        let tc = crate::config::TranscriptionConfig::default(); // enabled = false
+        let ch = make_channel().with_transcription(tc);
+        assert!(ch.transcription.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "whatsapp-web")]
+    fn session_file_paths_includes_wal_and_shm() {
+        let paths = WhatsAppWebChannel::session_file_paths("/tmp/test.db");
+        assert_eq!(
+            paths,
+            [
+                "/tmp/test.db".to_string(),
+                "/tmp/test.db-wal".to_string(),
+                "/tmp/test.db-shm".to_string(),
+            ]
+        );
     }
 }
